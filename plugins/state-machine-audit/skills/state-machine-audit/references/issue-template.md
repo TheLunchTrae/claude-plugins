@@ -4,7 +4,7 @@ One draft per confirmed failure. Write for the person who'll fix it: what goes w
 
 - **Title**: the symptom in plain words, as a user or caller sees it, not the mechanism. "A snippet saved while the project loads is dropped until restart", not "Race in startupSnippets cache".
 - **Severity**: from the failure checklist. Put it in the draft's front matter so filing can map it to the repo's labels. If you couldn't read the repo's labels, leave `labels` empty and say so in the report.
-- **Links**: permalinks to the audited commit (`https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<a>-L<b>`) so they survive moves. Name the symbol too.
+- **Links**: permalinks to the audited commit so they survive moves, in the host's format: GitHub `https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<a>-L<b>`, GitLab `https://<host>/<group>/<project>/-/blob/<sha>/<path>#L<a>-<b>`. Name the symbol too, so the link still helps if it breaks.
 - **Steps**: numbered, each with the code that makes it happen. For a race, say which order of events triggers it.
 - Note what you could not check (platform behaviour, timing) in the draft; if that's the whole case, it's unconfirmed and doesn't get a draft.
 

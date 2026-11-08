@@ -21,13 +21,15 @@ Search wide first, then read each hit's owner to see whether it changes over tim
 
 Adapt to the language. These are starting points for `rg`, not a complete list.
 
-```sh
+Run this block as one bash call, since `T` doesn't survive between calls. Where `rg` isn't on `PATH`, use the Grep tool with the same patterns.
+
+```bash
 # one file type covering the common languages; add yours. Pass the path (.) so rg never reads stdin.
 T=(--type-add 'src:*.{ts,tsx,js,mjs,cjs,rs,cs,swift,kt,go,py,php,java,rb}' -t src)
 
 # status-like fields and enums
-rg -n "${T[@]}" . -e '\b(status|state|phase|mode|stage|step)\b\s*[:=]' \
-  -e 'enum\s+\w*(State|Status|Phase|Mode|Stage)\b'
+rg -n "${T[@]}" . -e '\b(status|state|phase|mode|stage|step|kind)\b\s*[:=]' \
+  -e 'enum\s+\w*(State|Status|Phase|Mode|Stage|Kind)\b'
 
 # lifecycle flags assigned after construction
 rg -n "${T[@]}" . -e '\b(is|has)[A-Z]\w*\s*=\s*(true|false)\b' \
@@ -37,7 +39,7 @@ rg -n "${T[@]}" . -e '\b(is|has)[A-Z]\w*\s*=\s*(true|false)\b' \
 rg -n "${T[@]}" . -e 'setTimeout|setInterval|clearTimeout|AbortController|AbortSignal|CancellationToken|Task\.Delay|DispatchQueue|Timer\(|tokio::time|recv_timeout|time\.After|retry|backoff'
 
 # memoized promises and caches
-rg -n "${T[@]}" . -e 'new (Weak)?Map\(|Dictionary<|HashMap<|lru|memo|cache' \
+rg -n "${T[@]}" . -e 'new (Weak)?Map\(|Dictionary<|HashMap<|[Ll]ru|[Mm]emo|[Cc]ache' \
   -e '\.(get|set)\(\w+,\s*\w*[Pp]romise'
 ```
 

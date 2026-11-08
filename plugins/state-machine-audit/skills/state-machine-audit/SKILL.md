@@ -13,17 +13,18 @@ It produces three things:
 2. **Agent guidance** in `AGENTS.md`, so later changes keep the doc and tests in step.
 3. **One issue draft per confirmed failure**, with severity, plus a separate list of unconfirmed cases.
 
-Work in the user's working tree. Write the doc and the guidance there; never commit, push, file issues or open PRs unless the user asks. Issue drafts go outside the repo (see Step 6).
+Work in the user's working tree. Write the doc and the guidance there; never commit, push, file issues or open PRs unless the user asks. Issue drafts, notes and the report go outside the repo (see Step 6). Brief every subagent you start as read-only: no edits to tracked files, commits, pushes or issues, notes written only to the audit folder.
 
 The audit is language-agnostic. Read the code as it is: the language's own idioms decide what a state looks like (a Rust `Option`, a C# nullable, a Swift optional and a TypeScript `undefined` are the same signal).
 
 ## Step 0: Scope and what exists
 
-- Agree the scope with the user if the repo is large or holds several apps: whole repo, one package, or one flow. Default to the whole repo and say so.
+- Scope: audit the whole repo unless the user named a part. Don't stop to ask; say what you covered. For a monorepo too large to read in one pass, cover it by area with subagents (Step 1) rather than narrowing it.
 - Look for an existing state machines doc (`docs/state-machines.md`, `docs/developer/state-machines.md`, a wiki folder page, an architecture doc with a states section) and an existing `AGENTS.md` (or `CLAUDE.md`) section. If one exists, this is a **re-audit**: check the doc against the code, fix drift, and look for machines and failures it misses. Keep its format.
 - Look for linked shared conventions (an org `.github` repo's agent guidance). Follow them and link them; don't restate them.
-- Read existing open issues so a draft never duplicates one, and note the repo's labels for later. With the GitHub CLI: `gh api 'repos/{owner}/{repo}/issues?state=open' --paginate --jq '.[] | select(.pull_request == null) | "\(.number) \(.title)"'` and `gh api repos/{owner}/{repo}/labels --paginate --jq '.[].name'` (REST, so they also work where GraphQL is blocked).
-- Record the commit you audit (`git rev-parse HEAD`); issue drafts link code at that commit.
+- Look for a previous audit report (in the audit folder from Step 6, or wherever the user says) and read its Unconfirmed and Set aside sections, so you recheck rather than rediscover them.
+- Read existing open issues so a draft never duplicates one, and note the repo's labels for later. With the GitHub CLI: `gh api 'repos/{owner}/{repo}/issues?state=open' --paginate --jq '.[] | select(.pull_request == null) | "\(.number) \(.title)"'` and `gh api repos/{owner}/{repo}/labels --paginate --jq '.[].name'` (REST, so they also work where GraphQL is blocked). On another host (GitLab and the like), use its CLI or API if you have it; otherwise skip these reads and say so in the report.
+- Record the commit you audit (`git rev-parse HEAD`); issue drafts link code at that commit. Check that the tree is clean (`git status --porcelain`) and the commit is on the remote (`git branch -r --contains HEAD`). If not, tell the user, and say in the report that the links may not resolve or that lines may differ from the working tree.
 
 ## Step 1: Inventory the machines
 
@@ -57,7 +58,7 @@ Trace transitions from the code, not from names or comments. Every claim cites t
 
 ## Step 3: Look for failure states
 
-Check every machine against every section of [references/failure-checklist.md](references/failure-checklist.md), one machine at a time, and write down the answer to each question, not only the ones that look promising. Most real findings are in the places a quick read skips: a retry that waits on an event, a list that only grows, feedback that only one client shows. For more than a handful of machines, give each subagent a few machines, the checklist and the code, and merge their candidates. The main kinds:
+Check every machine against every section of [references/failure-checklist.md](references/failure-checklist.md), one machine at a time, and write down the answer to each question, not only the ones that look promising, in `notes/<machine>.md` in the audit folder. Most real findings are in the places a quick read skips: a retry that waits on an event, a list that only grows, feedback that only one client shows. For more than a handful of machines, give each subagent a few machines, the checklist and the code, and merge their candidates. The main kinds:
 
 - **Stuck**: a reachable state with no way out short of a restart (a cache that keeps a rejection, a flag never cleared on error, a page with no way back).
 - **Missing exits**: no error, cancel, timeout or retry path where the outside world can fail or the user can leave.
@@ -84,15 +85,19 @@ Two rules keep real findings out of the unconfirmed pile:
 - A premise the repo's own code, comments or docs assert (such as "a reload ends running terminals") counts as checked. Say in the draft that it rests on it.
 - Hard to set up isn't unconfirmed. If a test can drive it through the code, such as calling the same functions in the order two processes, two windows or two overlapping requests would, it's confirmable: write that test. Two processes on one directory, two windows, or a second client are normal use, not edge cases.
 
-Reproduction scripts live outside the repo. Import the repo's code by absolute path and run them with the repo as the working directory, so its dependencies and config resolve, using the repo's own test runner where it has one.
+Reproduction tests never become part of the repo. Prefer a script outside the repo that imports the repo's code by absolute path, run with the repo as the working directory so its dependencies and config resolve (this works with `node --test`, `cargo` examples run by path, `python -m pytest <path>` and the like). When the repo's runner only finds tests inside its own roots, as vitest and jest do, put an untracked file in its test folder named `sma-scratch-<machine>-<n>.test.<ext>`, unique per candidate, and delete it when you're done. Keep a copy of each repro in the audit folder so the verifier and the draft can cite it.
 
-Have a fresh subagent try to refute each confirmed candidate before it becomes a draft: the plugin's `state-machine-verifier` agent (or, if it isn't available, a fresh general-purpose agent given that agent's instructions), handed the candidate and the code, not your reasoning. Verifiers for different candidates can run in parallel. A refuted candidate is dropped or moved to unconfirmed with the reason. If you can't start a subagent at all, run the refutation yourself as a separate pass after all candidates are written, record it as `self-checked` in the draft, and say in the report that no independent check ran.
+Have a fresh subagent try to refute each confirmed candidate before it becomes a draft: the plugin's agent `state-machine-audit:state-machine-verifier` (or, if it isn't available, a fresh general-purpose agent given that agent's instructions), handed the candidate, the code and any repro test you wrote, not your reasoning. Verifiers for different candidates can run in parallel. Then act on each verdict:
+
+- `confirmed`: apply its corrections to steps, impact or severity, and draft it.
+- `unconfirmed`: move it to Unconfirmed with the gap the verifier named.
+- `refuted`: move it to Set aside with what prevents it. If you can't start a subagent at all, run the refutation yourself as a separate pass after all candidates are written, record it as `self-checked` in the draft, and say in the report that no independent check ran.
 
 ## Step 5: Write the doc and the guidance
 
-- **Doc**: follow [references/doc-template.md](references/doc-template.md). Put it where the repo keeps developer docs (`docs/developer/`, `docs/`, or a wiki source folder), or keep the existing doc's place and format. One section per machine, with its owner, states, transitions (a Mermaid `stateDiagram-v2`, a State | Event | Next table, or both) and failure states. A failure state links its issue once one exists; until then it says it's untracked. The doc describes behaviour; it doesn't hold bug reports.
+- **Doc**: follow [references/doc-template.md](references/doc-template.md). Put it where the repo keeps developer docs (`docs/developer/`, `docs/`, or a wiki source folder), or keep the existing doc's place and format. One section per machine, with its owner, states, transitions (a Mermaid `stateDiagram-v2`, a State | Event | Next table, or both) and failure states. Only confirmed failures go in the doc; unconfirmed cases stay in the report. A failure state links its issue once one exists; until then it ends with exactly `Not tracked yet.` The doc describes behaviour; it doesn't hold bug reports.
 - **Scope of the doc**: the repo's own doc rules apply to it (audience, where developer docs live, what stays out). CI and release workflows belong in it only when their state can strand a release or a user, such as a publish that half-completes; keep those sections short.
-- **Guidance**: add or update the `## State machines` section of `AGENTS.md` from [references/agents-guidance.md](references/agents-guidance.md), adapted to the repo's languages and test setup. If the repo only has `CLAUDE.md`, put it there. If shared org guidance already covers it, link that and keep only the repo-specific lines. If linked guidance can't be read, keep the full section and say so in the report.
+- **Guidance**: add or update the `## State machines` section of `AGENTS.md` from [references/agents-guidance.md](references/agents-guidance.md), adapted to the repo's languages and test setup. If neither `AGENTS.md` nor `CLAUDE.md` exists, create `AGENTS.md`. If the repo only has `CLAUDE.md`, put it there. If it has both and `CLAUDE.md` doesn't import `@AGENTS.md`, say in the report that Claude Code won't see the section and suggest the import. If shared org guidance already covers it, link that and keep only the repo-specific lines. If linked guidance can't be read, keep the full section and say so in the report.
 
 Show the user the doc's machine list and the guidance diff when done.
 
@@ -100,7 +105,7 @@ Show the user the doc's machine list and the guidance diff when done.
 
 Write one draft per confirmed failure with [references/issue-template.md](references/issue-template.md): a title that names the symptom, how it happens, where in the code (permalinks at the audited commit), impact, severity, and a fix direction. Don't merge two failures into one draft because they share a machine; do merge one failure that shows up in two machines.
 
-Put the drafts outside the repo: in a folder the user names, otherwise `state-machine-audit/<repo>/` under the system temp directory. Write:
+Put the drafts in the audit folder, outside the repo: a folder the user names, otherwise `~/.claude/state-machine-audit/<repo>/<date>/`, which lasts across sessions so a re-audit can read it. Write:
 
 - `NN-<slug>.md` per draft, highest severity first.
 - `report.md`: the audited commit, the machine list, the drafts by severity, an **Unconfirmed** section with each case, why it's unconfirmed, and what would settle it, and a **Set aside** section with candidates you dropped and why (refuted, or no harm), so a re-audit doesn't redo them. Note anything you couldn't check, such as labels or open issues without GitHub access.
@@ -109,7 +114,7 @@ Then report to the user: how many machines, the confirmed failures by severity w
 
 ## Step 7: Only when the user asks
 
-- **File the issues**: one per draft, its body without the front matter, with only labels the repo already has (map severity to its priority labels if it has them, and `bug` if it has it). Then replace "untracked" in the doc with each issue's link.
+- **File the issues**: one per draft, its body without the front matter, with only labels the repo already has (map severity to its priority labels if it has them, and `bug` if it has it). Then replace each failure's `Not tracked yet.` in the doc with `Tracked in [#N](<issue URL>).`
 - **Fix them**: one PR per issue, each starting with a failing test for the failure, following the repo's PR rules (the `pr-workflow` plugin if it's installed). A fix updates the doc's section and removes the failure note in the same PR.
 
 ## Re-audits and drift

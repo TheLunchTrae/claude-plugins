@@ -49,7 +49,7 @@ stateDiagram-v2
 
 Failure states:
 
-- <The state and how it's reached, in one or two lines.> Tracked in [#N](<issue URL>). <Or: "Not tracked yet." until the issue is filed.>
+- <A confirmed failure state and how it's reached, in one or two lines.> Tracked in [#N](<issue URL>). <Before the issue is filed, end the line with exactly: Not tracked yet.>
 
 ## No lasting state
 

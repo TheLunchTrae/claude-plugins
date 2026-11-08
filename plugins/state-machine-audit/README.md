@@ -14,12 +14,12 @@ Then ask for it in plain words ("audit this repo for state machines and failure 
 ## What it does
 
 1. Finds every implicit state machine and maps its owner, states, transitions and stale-event guards.
-2. Checks each one for stuck states, missing error, cancel, timeout and retry paths, lost work, races, impossible combinations, leaks and silent failures.
+2. Checks each one for stuck states, deferred actions that never retry, missing error, cancel and timeout paths, lost work, races, state that only grows or is keyed too coarsely, impossible combinations, leaks, feedback only one client shows, and behaviour that contradicts the docs.
 3. Confirms each candidate by a test or a full code trace, and has a separate `state-machine-verifier` agent try to refute it. Anything it can't confirm is listed apart, with what would settle it.
 4. Writes a state machines doc (one section per machine, Mermaid diagrams or transition tables, failure notes) and a `## State machines` section in `AGENTS.md` that keeps later changes, tests and the doc in step.
-5. Writes one issue draft per confirmed failure, with severity, steps, permalinks at the audited commit, impact and a fix direction, plus a `report.md`. Drafts go outside the repo.
+5. Writes one issue draft per confirmed failure, with severity, steps, permalinks at the audited commit, impact and a fix direction, plus a `report.md` with the unconfirmed and set-aside cases. A later re-audit reads that report first.
 
-It changes only the doc and `AGENTS.md` in your working tree. It files issues, commits, or opens fix PRs only when you ask; fix PRs follow the `pr-workflow` plugin when it's installed.
+In your working tree it changes only the state machines doc and the agent guidance (`AGENTS.md`, or `CLAUDE.md` when that's the repo's only agent file); repro tests it can't run from outside the repo are untracked scratch files, deleted when it's done. Drafts, notes and the report go to `~/.claude/state-machine-audit/<repo>/<date>/` unless you name another folder. It files issues, commits, or opens fix PRs only when you ask; fix PRs follow the `pr-workflow` plugin when it's installed.
 
 On a repo that already has a state machines doc, it re-audits: fixes drift between the doc and the code, and looks for machines and failures the doc misses.
 
