@@ -67,4 +67,4 @@ Commit `.config/mise/mise.lock` and the package-manager lockfiles. If mise, a to
 
 Some gates need Linux: Rust's `rust:policy` and `rust:mutants` use `setsid`, so Rust's `standards:check` can't pass on Windows or macOS. There, run what works locally, run the full gate on Linux (CI or WSL), and report the rest as not run.
 
-Open the PR the way the repo's PR rules say (the `pr-workflow` plugin when installed). The report names the catalog commit, the profiles and their directories, the groups left out, the gates run and their results, and anything waiting on the user's choice.
+Open the PR the way the repo's PR rules say (the Draft-Review-Ready PR Workflow plugin, `draft-review-ready`, when installed). The report names the catalog commit, the profiles and their directories, the groups left out, the gates run and their results, and anything waiting on the user's choice.

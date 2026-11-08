@@ -1,6 +1,7 @@
 {
   "name": "state-machine-audit",
-  "version": "0.1.0",
+  "displayName": "State Machine Audit",
+  "version": "0.1.1",
   "description": "Audit a codebase for implicit state machines and their failure states: map each machine, write a state machines doc and agent guidance, and draft one issue per confirmed failure.",
   "author": { "name": "Trae Stevens" },
   "license": "MIT",

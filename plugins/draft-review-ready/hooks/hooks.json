@@ -1,5 +1,5 @@
 {
-  "description": "pr-workflow: track PRs this session opens and block ending a turn while their review loop is unfinished",
+  "description": "Draft-Review-Ready PR Workflow: track PRs this session opens and block ending a turn while their review loop is unfinished",
   "hooks": {
     "PostToolUse": [
       {

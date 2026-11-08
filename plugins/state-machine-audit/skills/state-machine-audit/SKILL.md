@@ -118,7 +118,7 @@ Then report to the user: how many machines, the confirmed failures by severity w
 ## Step 7: Only when the user asks
 
 - **File the issues**: one per draft, its body without the front matter, with only labels the repo already has (map severity to its priority labels if it has them, and `bug` if it has it). Then replace each failure's `Not tracked yet.` in the doc with `Tracked in [#N](<issue URL>).`
-- **Fix them**: one PR per issue, each starting with a failing test for the failure, following the repo's PR rules (the `pr-workflow` plugin if it's installed). A fix updates the doc's section and removes the failure note in the same PR.
+- **Fix them**: one PR per issue, each starting with a failing test for the failure, following the repo's PR rules (the Draft-Review-Ready PR Workflow plugin, `draft-review-ready`, if it's installed). A fix updates the doc's section and removes the failure note in the same PR.
 
 ## Re-audits and drift
 

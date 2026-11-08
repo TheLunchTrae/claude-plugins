@@ -1,6 +1,7 @@
 {
-  "name": "pr-workflow",
-  "version": "0.1.0",
+  "name": "draft-review-ready",
+  "displayName": "Draft-Review-Ready PR Workflow",
+  "version": "0.2.0",
   "description": "Pull request workflow: draft first, independent reviewer loop, ready after approval, and a Stop hook that keeps sessions from ending a turn mid-review.",
   "author": { "name": "Trae Stevens" },
   "license": "MIT",
