@@ -1,19 +1,34 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   applyPlan,
   buildMiseConfig,
   detect,
+  EXAMPLES,
+  GROUPS,
   parseProfiles,
   plan,
+  prefixCodeowners,
   pruneCodeowners,
   rewriteFragmentNames,
+  splitTomlTables,
 } from "../skills/repo-standards/scripts/repo-standards.mjs";
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "repo-standards-"));
+const SCRIPT = fileURLToPath(new URL("../skills/repo-standards/scripts/repo-standards.mjs", import.meta.url));
+const temps = [];
+const tmp = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-standards-test-"));
+  temps.push(dir);
+  return dir;
+};
+after(() => {
+  for (const d of temps) fs.rmSync(d, { recursive: true, force: true });
+});
 
 function write(root, rel, content, mode) {
   const file = path.join(root, rel);
@@ -103,7 +118,7 @@ task_fragment = "20-csharp.toml"
 
 const run = (repo, opts) => {
   const result = plan({ catalog: opts.catalog, repo, ...opts });
-  applyPlan(repo, result);
+  applyPlan(repo, result, tmp());
   return result;
 };
 const read = (root, rel) => fs.readFileSync(path.join(root, rel), "utf8");
@@ -269,9 +284,21 @@ test("the real catalog applies cleanly", { skip: !process.env.STANDARDS_CATALOG 
   for (const name of names) {
     const r = tmp();
     run(r, { catalog, profiles: parseProfiles([name]), packageManager: "bun", owner: "@trae" });
-    assert.ok(has(r, `.config/mise/conf.d/${name === "markdown" ? "markdown" : name}.toml`), name);
+    assert.ok(has(r, `.config/mise/conf.d/${name}.toml`), name);
+  }
+  // Every path the plugin names must still exist, or a catalog rename would
+  // quietly copy a left-out file back in.
+  const templates = { ts: "TS", rust: "Rust", python: "Python", csharp: "C#", markdown: "Markdown", shell: "Shell" };
+  for (const [profile, groups] of Object.entries(GROUPS)) {
+    for (const [group, def] of Object.entries(groups)) {
+      for (const f of def.files) assert.ok(has(catalog, `${templates[profile]}/${f}`), `${profile}:${group} ${f}`);
+    }
+  }
+  for (const [profile, files] of Object.entries(EXAMPLES)) {
+    for (const f of files) assert.ok(has(catalog, `${templates[profile]}/${f}`), `${profile} example ${f}`);
   }
   const result = run(repo, { catalog, profiles: parseProfiles(["ts", "rust"]), packageManager: "bun", owner: "@trae" });
+  assert.ok(result.executables.includes(".config/mise/tasks/hygiene"));
   const config = read(repo, ".config/mise/config.toml");
   assert.doesNotMatch(config, /syft|sbom|_dispatch/);
   assert.deepEqual(result.notes, []);
@@ -281,4 +308,159 @@ test("the real catalog applies cleanly", { skip: !process.env.STANDARDS_CATALOG 
       assert.doesNotMatch(read(repo, f), /\b20-(ts|rust)\.toml\b/, f);
     }
   }
+});
+
+test("a numbered fragment or another file with the profile's tasks is a merge, not a second fragment", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  write(repo, ".config/mise/conf.d/20-ts.toml", '[tasks."ts:lint"]\nrun = "mine"\n');
+  write(repo, "mise.toml", '[tasks."rust:test"]\nrun = "cargo test"\n');
+  write(repo, ".config/mise/conf.d/30-csharp.toml", "[env]\n");
+  const result = run(repo, { catalog, profiles: parseProfiles(["ts", "rust", "csharp"]), packageManager: "bun" });
+  assert.ok(!has(repo, ".config/mise/conf.d/ts.toml"));
+  assert.ok(!has(repo, ".config/mise/conf.d/csharp.toml"));
+  assert.ok(!has(repo, ".config/mise/conf.d/rust.toml"));
+  assert.ok(!has(repo, ".config/mise/config.toml"));
+  const reason = (dest) => result.conflicts.find((c) => c.dest === dest).reason;
+  assert.match(reason(".config/mise/conf.d/ts.toml"), /20-ts\.toml already defines ts:\* tasks/);
+  assert.match(reason(".config/mise/conf.d/rust.toml"), /mise\.toml already defines rust:\* tasks/);
+  assert.match(reason(".config/mise/config.toml"), /the repo's mise config is mise\.toml/);
+  assert.match(reason(".config/mise/conf.d/csharp.toml"), /30-csharp\.toml is the same fragment under another name/);
+  // The generated config is kept for the merge, aggregates and all.
+  const config = result.conflicts.find((c) => c.dest === ".config/mise/config.toml");
+  assert.match(fs.readFileSync(config.merge, "utf8"), /\{ task = "ts:standards:check" \}, \{ task = "rust:standards:check" \}/);
+  // The waiting TS fragment still has the left-out mutation task in it.
+  assert.ok(result.dropped.find((d) => d.group === "ts:mutation").mentions.includes(".config/mise/conf.d/ts.toml (to merge) (1)"));
+});
+
+test("files waiting for a merge are transformed and scanned like written ones", () => {
+  const catalog = makeCatalog();
+  write(catalog, "Rust/.github/CODEOWNERS", "* @OWNER\n/stryker.config.mjs @OWNER\n/.config/mise/conf.d/20-rust.toml @OWNER\n");
+  const repo = tmp();
+  // Rust first, so TS's CODEOWNERS is the one that waits for a merge.
+  const result = run(repo, { catalog, profiles: parseProfiles(["rust", "ts"]), packageManager: "bun", owner: "@trae" });
+  const ts = result.conflicts.find((c) => c.dest === ".github/CODEOWNERS");
+  assert.match(ts.reason, /copied earlier in this run/);
+  const merge = fs.readFileSync(ts.merge, "utf8");
+  assert.doesNotMatch(merge, /@OWNER|stryker|Replace/);
+  assert.match(merge, /\/package\.json @trae/);
+  assert.match(read(repo, ".github/CODEOWNERS"), /conf\.d\/rust\.toml @trae/);
+  // The Rust copy was written first and keeps a line for a left-out TS file.
+  const mutation = result.dropped.find((d) => d.group === "ts:mutation");
+  assert.ok(mutation.mentions.includes(".github/CODEOWNERS (1)"), mutation.mentions.join());
+});
+
+test("other existing fragments are named, since they may run a profile under another prefix", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  write(repo, ".config/mise/conf.d/setup-ui.toml", '[tasks."ui:lint"]\nrun = "oxlint"\n');
+  const result = run(repo, { catalog, profiles: parseProfiles(["ts"]), packageManager: "bun" });
+  assert.ok(result.notes.some((n) => n.includes(".config/mise/conf.d/setup-ui.toml") && /another prefix/.test(n)));
+});
+
+test("GitHub's other CODEOWNERS and template locations count as existing", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  write(repo, "docs/CODEOWNERS", "* @me\n");
+  write(repo, ".github/PULL_REQUEST_TEMPLATE.md", "mine\n");
+  const result = run(repo, { catalog, profiles: parseProfiles(["rust"]) });
+  assert.ok(!has(repo, ".github/CODEOWNERS"));
+  assert.match(result.conflicts.find((c) => c.dest === ".github/CODEOWNERS").reason, /docs\/CODEOWNERS/);
+  assert.match(result.conflicts.find((c) => c.dest === ".github/pull_request_template.md").reason, /PULL_REQUEST_TEMPLATE\.md/);
+  assert.deepEqual(fs.readdirSync(path.join(repo, ".github")), ["PULL_REQUEST_TEMPLATE.md"]);
+});
+
+test("a subdirectory profile's CODEOWNERS points at its directory", () => {
+  const text = "* @a\n/Directory.Build.props @a\n/.github/workflows/ @a\n/.config/mise/conf.d/csharp.toml @a\nCargo.toml @a\n";
+  assert.equal(
+    prefixCodeowners(text, "desktop"),
+    "* @a\n/desktop/Directory.Build.props @a\n/.github/workflows/ @a\n/.config/mise/conf.d/csharp.toml @a\nCargo.toml @a\n",
+  );
+  assert.equal(prefixCodeowners(text, "."), text);
+});
+
+test("left-out Rust mutation is reported where the policy task and tests use it", () => {
+  const catalog = makeCatalog();
+  write(catalog, "Rust/scripts/mutants-lock.sh", "#!/bin/sh\n", 0o755);
+  write(catalog, "Rust/tests/allow_policy.rs", 'task_definition(&tasks, "rust:mutants")\n');
+  write(catalog, "Mise/conf.d/20-rust.toml", '[tasks."rust:policy"]\nrun = "sh scripts/mutants-lock.sh --self-test"\n\n[tasks."rust:mutants"]\nrun = "cargo mutants"\n');
+  const repo = tmp();
+  const result = run(repo, { catalog, profiles: parseProfiles(["rust"]), without: ["rust:mutation"] });
+  assert.ok(!has(repo, "scripts/mutants-lock.sh"));
+  const d = result.dropped.find((x) => x.group === "rust:mutation");
+  assert.deepEqual(d.tasks, ["rust:mutants"]);
+  assert.deepEqual(d.mentions.sort(), [".config/mise/conf.d/rust.toml (2)", "tests/allow_policy.rs (1)"]);
+});
+
+test("a failed apply removes what it wrote", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  const result = plan({ catalog, repo, profiles: parseProfiles(["rust"]) });
+  // Something appears between the plan and the write.
+  write(repo, result.ops[result.ops.length - 1].dest, "late\n");
+  assert.throws(() => applyPlan(repo, result, tmp()), /EEXIST/);
+  const left = fs.readdirSync(repo, { recursive: true }).filter((f) => fs.statSync(path.join(repo, f)).isFile());
+  assert.deepEqual(left, [result.ops[result.ops.length - 1].dest.split("/").join(path.sep)]);
+});
+
+test("detect keeps a separate nested app and folds workspace members into their root", () => {
+  const repo = tmp();
+  // A root with only tooling, and a real app under apps/setup.
+  write(repo, "package.json", "{}");
+  write(repo, "eslint.config.mjs", "");
+  write(repo, "apps/setup/package.json", "{}");
+  write(repo, "apps/setup/pnpm-lock.yaml", "");
+  write(repo, "apps/setup/tsconfig.json", "{}");
+  write(repo, "apps/setup/src/a.ts", "");
+  assert.deepEqual(detect(repo).profiles.ts.dirs, ["apps/setup"]);
+  assert.equal(detect(repo).packageManagers["apps/setup"].packageManager, "pnpm");
+
+  const ws = tmp();
+  write(ws, "package.json", '{"workspaces":["packages/*"]}');
+  write(ws, "bun.lock", "");
+  write(ws, "tsconfig.json", "{}");
+  write(ws, "packages/a/package.json", "{}");
+  write(ws, "packages/a/src/a.ts", "");
+  write(ws, "tools/x/package.json", "{}");
+  write(ws, "tools/x/index.js", "");
+  const d = detect(ws);
+  assert.deepEqual(d.profiles.ts.dirs.sort(), [".", "tools/x"]);
+  // tools/x has no lockfile, so it uses the root's.
+  assert.equal(d.packageManagers["tools/x"].packageManager, "bun");
+  assert.equal(d.packageManagers["tools/x"].inheritedFrom, ".");
+});
+
+test("detect folds several C# projects without a solution into their parent", () => {
+  const repo = tmp();
+  write(repo, "desktop/App/App.csproj", "");
+  write(repo, "desktop/Core/Core.csproj", "");
+  assert.deepEqual(detect(repo).profiles.csharp.dirs, ["desktop"]);
+});
+
+test("detect reports existing numbered fragments and other mise configs", () => {
+  const repo = tmp();
+  write(repo, ".config/mise/conf.d/20-ts.toml", "");
+  write(repo, ".mise.toml", "");
+  const { existing } = detect(repo);
+  assert.ok(existing.includes(".mise.toml"));
+  assert.ok(existing.includes(".config/mise/conf.d/20-ts.toml"));
+});
+
+test("TOML splitting handles trailing comments, arrays of tables and mixed quotes", () => {
+  const chunks = splitTomlTables(`a = 1\n[tasks.x] # note\nrun = """\n'''\n[not.a.table]\n"""\n[[array]]\nb = 2\n`);
+  assert.deepEqual(chunks.map((c) => c.header), [null, "[tasks.x]", "[[array]]"]);
+});
+
+test("the CLI runs through a symlink and rejects unknown options", { skip: process.platform === "win32" }, () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  const link = path.join(tmp(), "rs.mjs");
+  fs.symlinkSync(SCRIPT, link);
+  const out = execFileSync(process.execPath, [link, "apply", `--catalog=${catalog}`, "--repo", repo, "--profile", "rust", "--dry-run"], { encoding: "utf8" });
+  assert.match(out, /^Would write:/);
+  assert.deepEqual(fs.readdirSync(repo), []);
+  const bad = spawnSync(process.execPath, [SCRIPT, "apply", "--catalog", catalog, "--platform", "linux-x64"], { encoding: "utf8" });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /unknown option --platform/);
+  assert.throws(() => parseProfiles(["rust=C:\\x"]), /inside the repo/);
 });

@@ -6,15 +6,17 @@
 //   repo-standards.mjs apply --catalog <dir> [--repo <dir>] --profile <name>[=<dir>]...
 //                            [--package-manager <pm>] [--owner <@handle>]
 //                            [--platforms <list>] [--with <group>]... [--without <group>]...
-//                            [--dry-run]
+//                            [--dry-run] [--json]
 //
 // `apply` never overwrites a file. Anything that already exists, in the repo or
-// from an earlier profile in the same run, is reported for a hand merge.
+// from an earlier profile in the same run, is reported for a hand merge, and
+// the version to merge in is written to a scratch directory outside the repo.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_PLATFORMS = ["linux-x64", "macos-arm64", "windows-x64"];
 export const PACKAGE_MANAGERS = ["bun", "pnpm", "npm", "yarn"];
@@ -78,6 +80,9 @@ export const GROUPS = {
       on: true,
       files: ["scripts/mutants-lock.sh", "scripts/verify-mutants.sh", "tests/mutation_report_policy.rs"],
       tasks: [/^rust:mutants/],
+      // rust:policy self-tests the mutation scripts and tests/allow_policy.rs
+      // checks the mutation tasks, so both are reported when the group is off.
+      residue: [/mutants-lock|verify-mutants|mutation_report_policy|rust:mutants|cargo-mutants/],
     },
   },
   python: {
@@ -85,12 +90,13 @@ export const GROUPS = {
       on: true,
       files: ["scripts/check-mutation-score.py", "scripts/run-mutation-transaction.py"],
       tasks: [/^py:mutants/, /^py:mutation/],
+      residue: [/mutmut|check-mutation-score|run-mutation-transaction|py:mutants|py:mutation/],
     },
   },
 };
 
 // Template files that only demonstrate the profile. Never copied.
-const EXAMPLES = {
+export const EXAMPLES = {
   ts: ["bun.lock", "src/", "tests/"],
   markdown: ["content/example.mdx", "docs/example.md"],
   shell: ["scripts/project-name.sh", "tests/project-name.bats"],
@@ -100,6 +106,19 @@ const EXAMPLES = {
 const NOT_COPIED = ["README.md", "AGENTS.md", ".github/pull_request_template.md"];
 
 const SHARED_WHOLE = [".gitignore", ".gitattributes", ".gitleaks.toml"];
+
+// Other places mise reads project config from. When the repo uses one, the
+// aggregate tasks are merged there instead of into a second config file.
+const OTHER_MISE_CONFIGS = ["mise.toml", ".mise.toml", ".config/mise.toml", ".mise/config.toml", "mise/config.toml"];
+
+// Files GitHub reads in place of one this run writes.
+const ALIASES = {
+  ".github/CODEOWNERS": ["CODEOWNERS", "docs/CODEOWNERS"],
+  ".github/pull_request_template.md": [
+    ".github/PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE/", "PULL_REQUEST_TEMPLATE.md",
+    "pull_request_template.md", "docs/pull_request_template.md", "docs/PULL_REQUEST_TEMPLATE.md",
+  ],
+};
 
 const PR_TEMPLATE = `### What does this PR do?
 
@@ -140,6 +159,69 @@ function matchesAny(rel, patterns) {
   return patterns.some((p) => (p.endsWith("/") ? rel.startsWith(p) : rel === p));
 }
 
+// Finds rel under root ignoring case, as GitHub, Windows and macOS do. A
+// trailing slash means a directory with something in it. Returns the path as
+// it is on disk, or null.
+function findCaseless(root, rel) {
+  const dir = rel.endsWith("/");
+  let at = root;
+  const found = [];
+  for (const part of rel.replace(/\/$/, "").split("/")) {
+    let entries;
+    try {
+      entries = fs.readdirSync(at);
+    } catch {
+      return null;
+    }
+    const hit = entries.find((e) => e.toLowerCase() === part.toLowerCase());
+    if (!hit) return null;
+    found.push(hit);
+    at = path.join(at, hit);
+  }
+  const stat = fs.statSync(at);
+  if (dir ? !stat.isDirectory() || fs.readdirSync(at).length === 0 : !stat.isFile()) return null;
+  return found.join("/") + (dir ? "/" : "");
+}
+
+function existsCaseless(root, rel) {
+  return findCaseless(root, rel) !== null;
+}
+
+// Converts a workspace glob (apps/*, packages/**) to a regex for directories.
+function globRe(glob) {
+  const body = glob
+    .replace(/\/+$/, "")
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\u0000/g, ".*");
+  return new RegExp(`^${body}$`);
+}
+
+// The workspace member globs of a JavaScript root: package.json workspaces
+// (npm, Yarn, Bun) and pnpm-workspace.yaml packages.
+function workspaceGlobs(dir) {
+  const globs = [];
+  const pkg = readJson(path.join(dir, "package.json"));
+  const ws = Array.isArray(pkg?.workspaces) ? pkg.workspaces : pkg?.workspaces?.packages;
+  if (Array.isArray(ws)) globs.push(...ws.filter((g) => typeof g === "string"));
+  try {
+    const yaml = fs.readFileSync(path.join(dir, "pnpm-workspace.yaml"), "utf8");
+    let inPackages = false;
+    for (const line of yaml.split(/\r?\n/)) {
+      if (/^packages\s*:/.test(line)) inPackages = true;
+      else if (/^\S/.test(line)) inPackages = false;
+      else if (inPackages) {
+        const m = line.match(/^\s*-\s*["']?([^"'#]+?)["']?\s*(#.*)?$/);
+        if (m) globs.push(m[1]);
+      }
+    }
+  } catch {
+    // no pnpm workspace
+  }
+  return globs.filter((g) => !g.startsWith("!")).map((g) => g.replace(/^\.\//, ""));
+}
+
 export function plainFragmentName(name) {
   return name.replace(/^\d+-/, "");
 }
@@ -169,6 +251,21 @@ export function pruneCodeowners(text, excluded, owner) {
   let out = lines.join("\n");
   if (owner) out = out.replace(/Replace @(?!OWNER\b)\S+ with a real human owner\.\s*/, "");
   return out;
+}
+
+// For a profile copied into a subdirectory, points its CODEOWNERS patterns at
+// that directory. Paths under .github/ and .config/ stay at the root, where
+// those files are written; the catch-all and unanchored names stay as they are.
+export function prefixCodeowners(text, dir) {
+  if (dir === ".") return text;
+  return text
+    .split("\n")
+    .map((line) => {
+      const m = line.match(/^(\/)(\S+)(.*)$/);
+      if (!m || /^\.(github|config)\//.test(m[2])) return line;
+      return `/${dir}/${m[2]}${m[3]}`;
+    })
+    .join("\n");
 }
 
 function isText(buf) {
@@ -212,21 +309,24 @@ export function readManifest(catalog) {
 export function splitTomlTables(text) {
   const lines = text.split("\n");
   const chunks = [{ header: null, lines: [] }];
-  let inString = false;
+  let open = null; // the delimiter of the multi-line string we're inside
   for (const line of lines) {
-    if (!inString && /^\[[^\]]+\]\s*$/.test(line)) {
-      chunks.push({ header: line.trim(), lines: [line] });
+    const header = !open && line.match(/^(\[\[?[^\]]+\]\]?)\s*(#.*)?$/);
+    if (header) {
+      chunks.push({ header: header[1], lines: [line] });
     } else {
       chunks[chunks.length - 1].lines.push(line);
     }
-    const quotes = (line.match(/"""|'''/g) || []).length;
-    if (quotes % 2 === 1) inString = !inString;
+    for (const m of line.matchAll(/"""|'''/g)) {
+      if (!open) open = m[0];
+      else if (m[0] === open) open = null;
+    }
   }
   return chunks;
 }
 
 function tableName(header) {
-  return header.slice(1, -1).trim().replace(/^tasks\./, "task:").replace(/"/g, "");
+  return header.replace(/^\[+|\]+$/g, "").trim().replace(/^tasks\./, "task:").replace(/["']/g, "");
 }
 
 // Builds .config/mise/config.toml from the catalog's: no syft or sbom task, no
@@ -312,13 +412,21 @@ export function detect(repo) {
     if (dirs.length) profiles[key] = { dirs, evidence };
   };
 
+  const under = (f, d) => d === "." || f.startsWith(`${d}/`);
+  const inside = (d, o) => o !== d && (o === "." || d.startsWith(`${o}/`));
+
+  // A JavaScript root is a package.json with a tsconfig.json, or with sources
+  // of its own (not ones that belong to a deeper package.json).
   const pkgDirs = dirsWith((f) => base(f) === "package.json");
-  const tsDirs = pkgDirs.filter(
-    (d) =>
-      fs.existsSync(path.join(repo, d, "tsconfig.json")) ||
-      files.some((f) => (d === "." || f.startsWith(`${d}/`)) && /\.(c|m)?[jt]sx?$/.test(f)),
-  );
-  add("ts", tsDirs, "package.json with TypeScript or JavaScript sources");
+  const owner = (f) =>
+    pkgDirs.filter((d) => under(f, d)).sort((a, b) => b.length - a.length)[0];
+  const sourceOwners = new Set(files.filter((f) => /\.(c|m)?[jt]sx?$/.test(f) && !/\.config\./.test(base(f))).map(owner));
+  const jsRoots = pkgDirs.filter((d) => fs.existsSync(path.join(repo, d, "tsconfig.json")) || sourceOwners.has(d));
+  // Workspace members belong to their workspace root; other nested roots,
+  // such as a separate app in a subdirectory, stay separate.
+  const members = (d) => workspaceGlobs(path.join(repo, d)).map((g) => globRe(d === "." ? g : `${d}/${g}`));
+  const tsDirs = jsRoots.filter((d) => !jsRoots.some((o) => inside(d, o) && members(o).some((re) => re.test(d))));
+  add("ts", tsDirs, "package.json with a tsconfig.json or its own TypeScript or JavaScript sources");
   add("rust", dirsWith((f) => base(f) === "Cargo.toml"), "Cargo.toml");
   add("go", dirsWith((f) => base(f) === "go.mod"), "go.mod");
   add("python", dirsWith((f) => ["pyproject.toml", "setup.py", "requirements.txt"].includes(base(f))), "pyproject.toml, setup.py or requirements.txt");
@@ -329,22 +437,38 @@ export function detect(repo) {
   if (shell.length) profiles.shell = { dirs: ["."], evidence: `${shell.length} shell file(s)`, candidate: true };
   const md = files.filter((f) => /\.mdx?$/.test(f));
   if (md.length) profiles.markdown = { dirs: ["."], evidence: `${md.length} Markdown/MDX file(s)`, candidate: true };
-  // Keep only the shallowest dir per profile unless nested roots are separate.
-  for (const p of Object.values(profiles)) {
-    p.dirs = p.dirs.filter((d) => !p.dirs.some((o) => o !== d && (o === "." || d.startsWith(`${o}/`))));
+  // Cargo, Go, Python, Swift and Gradle roots own the directories below them.
+  for (const [key, p] of Object.entries(profiles)) {
+    if (key !== "ts") p.dirs = p.dirs.filter((d) => !p.dirs.some((o) => inside(d, o)));
+  }
+  // Several projects without a solution are one C# root at their common parent.
+  if (profiles.csharp?.dirs.length > 1) {
+    const parts = profiles.csharp.dirs.map((d) => d.split("/"));
+    const common = [];
+    for (let i = 0; parts.every((p) => p[i] !== undefined && p[i] === parts[0][i]); i++) common.push(parts[0][i]);
+    profiles.csharp.dirs = [common.join("/") || "."];
   }
 
+  // A root with no lockfile of its own uses the nearest one above it.
   const packageManagers = {};
-  for (const d of tsDirs) packageManagers[d] = detectPackageManager(path.join(repo, d));
+  for (const d of tsDirs) {
+    let pm = detectPackageManager(path.join(repo, d));
+    for (let up = d; !pm.packageManager && !pm.ambiguous && up !== "."; ) {
+      up = path.posix.dirname(up);
+      const above = detectPackageManager(path.join(repo, up));
+      if (above.packageManager || above.ambiguous) pm = { ...above, inheritedFrom: up };
+    }
+    packageManagers[d] = pm;
+  }
 
   const watched = [
-    ".config/mise/config.toml", "mise.toml", ".mise.toml", "AGENTS.md", "CLAUDE.md", "README.md",
+    ".config/mise/config.toml", ...OTHER_MISE_CONFIGS, "AGENTS.md", "CLAUDE.md", "README.md",
     "CONTEXT.md", ".gitignore", ".gitattributes", ".gitleaks.toml", ".github/CODEOWNERS",
-    ".github/pull_request_template.md", "docs/",
+    ".github/pull_request_template.md", ...Object.values(ALIASES).flat(), "docs/",
   ];
-  const existing = watched.filter((w) =>
-    w.endsWith("/") ? files.some((f) => f.startsWith(w)) : fs.existsSync(path.join(repo, w)),
-  );
+  const existing = watched.filter((w) => existsCaseless(repo, w));
+  const fragments = walk(path.join(repo, ".config/mise/conf.d")).map((f) => `.config/mise/conf.d/${f}`);
+  existing.push(...fragments);
   const workflows = files.filter((f) => f.startsWith(".github/workflows/"));
 
   return {
@@ -364,7 +488,7 @@ export function parseProfiles(values) {
   return values.map((v) => {
     const [name, dir = "."] = v.split("=");
     const clean = path.posix.normalize(dir.replace(/\\/g, "/")).replace(/\/$/, "");
-    if (clean.startsWith("..") || path.posix.isAbsolute(clean)) {
+    if (clean === ".." || clean.startsWith("../") || path.posix.isAbsolute(clean) || /^[a-zA-Z]:/.test(clean)) {
       throw new Error(`--profile ${v}: the directory must be inside the repo`);
     }
     return { name, dir: clean || "." };
@@ -412,33 +536,56 @@ export function plan(opts) {
   }
 
   const ops = []; // { kind: copy|write, dest, src?, content?, mode? }
-  const conflicts = []; // { dest, src?, reason }
+  // { dest, src?, content?, mode?, reason }: content is what to merge in,
+  // already transformed like a written file.
+  const conflicts = [];
   const notes = [];
   const claimed = new Set();
-  const exists = (rel) => claimed.has(rel) || fs.existsSync(path.join(repo, rel));
+  // Why dest can't be written, or null.
+  const blocked = (rel) => {
+    if (claimed.has(rel)) return "copied earlier in this run";
+    if (fs.existsSync(path.join(repo, rel))) return "already in the repo";
+    const alias = (ALIASES[rel] || []).map((a) => findCaseless(repo, a)).find(Boolean);
+    if (alias) return `the repo already has ${alias}, which GitHub uses instead`;
+    const caseless = findCaseless(repo, rel);
+    if (caseless) return `the repo already has ${caseless}`;
+    return null;
+  };
 
   const transform = (text) => {
     const out = rewriteFragmentNames(text);
     return owner ? out.replace(/@OWNER\b/g, owner) : out;
   };
-  const addCopy = (srcAbs, dest, extra = (t) => t) => {
-    if (exists(dest)) {
-      conflicts.push({ dest, src: srcAbs, reason: claimed.has(dest) ? "copied earlier in this run" : "already in the repo" });
+  const addCopy = (srcAbs, dest, extra = (t) => t, why = null) => {
+    const buf = fs.readFileSync(srcAbs);
+    const mode = fs.statSync(srcAbs).mode & 0o777;
+    const op = isText(buf) ? { kind: "write", dest, content: extra(transform(buf.toString("utf8"))), mode, src: srcAbs } : { kind: "copy", dest, src: srcAbs, mode };
+    const reason = why || blocked(dest);
+    if (reason) {
+      conflicts.push({ ...op, reason });
       return;
     }
     claimed.add(dest);
-    const buf = fs.readFileSync(srcAbs);
-    const mode = fs.statSync(srcAbs).mode & 0o777;
-    ops.push(isText(buf) ? { kind: "write", dest, content: extra(transform(buf.toString("utf8"))), mode, src: srcAbs } : { kind: "copy", dest, src: srcAbs, mode });
+    ops.push(op);
   };
-  const addWrite = (dest, content, why) => {
-    if (exists(dest)) {
-      conflicts.push({ dest, reason: `already in the repo; ${why}` });
+  const addWrite = (dest, content, hint, why = null) => {
+    const reason = why || blocked(dest);
+    if (reason) {
+      conflicts.push({ dest, content, mode: 0o644, reason: `${reason}; ${hint}` });
       return;
     }
     claimed.add(dest);
     ops.push({ kind: "write", dest, content, mode: 0o644 });
   };
+
+  // The repo's own mise config files, to find tasks a fragment would redefine.
+  const repoMise = [
+    ".config/mise/config.toml",
+    ...OTHER_MISE_CONFIGS,
+    ...walk(path.join(repo, ".config/mise/conf.d")).map((f) => `.config/mise/conf.d/${f}`),
+  ].filter((f) => f.endsWith(".toml") && fs.existsSync(path.join(repo, f)));
+  const definesPrefix = (file, prefix) =>
+    splitTomlTables(fs.readFileSync(path.join(repo, file), "utf8")).some((c) => c.header && tableName(c.header).startsWith(`task:${prefix}:`));
 
   // Shared baseline.
   for (const f of SHARED_WHOLE) {
@@ -455,7 +602,13 @@ export function plan(opts) {
     prefixes,
     platforms,
   );
-  addWrite(".config/mise/config.toml", miseConfig, "merge the aggregate tasks for the new profiles into it by hand");
+  const otherConfig = OTHER_MISE_CONFIGS.find((f) => fs.existsSync(path.join(repo, f)));
+  addWrite(
+    ".config/mise/config.toml",
+    miseConfig,
+    "merge the settings, tools and aggregate tasks into it by hand",
+    otherConfig ? `the repo's mise config is ${otherConfig}, and a second config file would split it` : null,
+  );
   for (const h of unknown) notes.push(`The catalog's Mise/config.toml has ${h}, which this plugin doesn't know; it was kept, so check it applies.`);
 
   const fragments = [];
@@ -474,7 +627,8 @@ export function plan(opts) {
     for (const rel of walk(templateDir)) {
       if (NOT_COPIED.includes(rel) || matchesAny(rel, excluded)) continue;
       const dest = rel.startsWith(".github/") || p.dir === "." ? rel : `${p.dir}/${rel}`;
-      const extra = rel === ".github/CODEOWNERS" ? (t) => pruneCodeowners(t, leftOut, owner) : undefined;
+      const extra =
+        rel === ".github/CODEOWNERS" ? (t) => prefixCodeowners(pruneCodeowners(t, leftOut, owner), p.dir) : undefined;
       addCopy(path.join(templateDir, rel), dest, extra);
     }
     if (fs.existsSync(path.join(templateDir, "AGENTS.md"))) agentFragments.push(`${meta.template}/AGENTS.md`);
@@ -482,7 +636,19 @@ export function plan(opts) {
 
     const fragmentName = plainFragmentName(meta.task_fragment);
     const fragmentDest = `.config/mise/conf.d/${fragmentName}`;
-    addCopy(path.join(catalog, "Mise", "conf.d", meta.task_fragment), fragmentDest);
+    // mise loads every conf.d file, so a numbered copy of the same fragment or
+    // any file that already defines the profile's tasks would clash with it.
+    const clash = repoMise.find(
+      (f) => f !== fragmentDest && (plainFragmentName(path.posix.basename(f)) === fragmentName || definesPrefix(f, meta.task_prefix)),
+    );
+    addCopy(
+      path.join(catalog, "Mise", "conf.d", meta.task_fragment),
+      fragmentDest,
+      undefined,
+      clash
+        ? `the repo's ${clash} ${definesPrefix(clash, meta.task_prefix) ? `already defines ${meta.task_prefix}:* tasks` : "is the same fragment under another name"}; merge into one file named ${fragmentName}`
+        : null,
+    );
     fragments.push(fragmentDest);
     const fragmentText = fs.readFileSync(path.join(catalog, "Mise", "conf.d", meta.task_fragment), "utf8");
     for (const g of off) {
@@ -494,36 +660,75 @@ export function plan(opts) {
     }
     if (p.dir !== ".") {
       notes.push(`${fragmentDest}: the ${meta.task_prefix}:* tasks must run in ${p.dir}; add dir = "{{config_root}}/${p.dir}" to each.`);
+      notes.push(
+        `${meta.template} files copied into ${p.dir} still assume the profile is at the repo root: fix paths in .github/workflows (hashFiles, working directories) and in any test that reads repo files, such as Rust's tests reading .config/mise from CARGO_MANIFEST_DIR. CODEOWNERS patterns for its files were prefixed with /${p.dir}/.`,
+      );
     }
     if (BUN_PROFILES.has(p.name) && packageManager !== "bun") {
       notes.push(`${fragmentDest} and the scripts in ${meta.template}/package.json use Bun; rewrite them for ${packageManager} and drop the bun tool pin (see the finishing reference).`);
     }
   }
   if (!owner) notes.push("CODEOWNERS still says @OWNER; pass --owner or replace it by hand.");
+  // A repo can run a profile under its own prefix, such as ui:* for its
+  // TypeScript app, which no prefix check can see.
+  const clashing = new Set(conflicts.map((c) => c.reason.match(/the repo's (\S+) /)?.[1]).filter(Boolean));
+  const others = repoMise.filter((f) => f.startsWith(".config/mise/conf.d/") && !fragments.includes(f) && !clashing.has(f));
+  if (others.length) {
+    notes.push(`The repo already has ${others.join(", ")}. If one runs a profile applied here under another prefix, merge the new fragment into it instead of keeping both.`);
+  }
 
-  // Lines in copied files that still refer to a left-out group.
+  // Lines in copied files, and in files waiting for a merge, that still refer
+  // to a left-out group.
   for (const d of dropped) {
     d.mentions = [];
     if (!d.residue.length) continue;
-    for (const op of ops) {
+    for (const op of [...ops, ...conflicts]) {
       // The shared ignore files stay whole, as the catalog says.
-      if (op.kind !== "write" || SHARED_WHOLE.includes(op.dest) || op.dest === ".config/mise/config.toml") continue;
+      if (typeof op.content !== "string" || SHARED_WHOLE.includes(op.dest) || op.dest === ".config/mise/config.toml") continue;
       const hits = op.content.split("\n").filter((l) => d.residue.some((re) => re.test(l))).length;
-      if (hits) d.mentions.push(`${op.dest} (${hits})`);
+      if (hits) d.mentions.push(`${op.dest}${ops.includes(op) ? "" : " (to merge)"} (${hits})`);
     }
   }
 
-  return { ops, conflicts, notes, fragments, agentFragments, profileDocs, dropped, prefixes, platforms };
+  // Git on Windows doesn't record these modes from the file system.
+  const executables = ops.filter((o) => o.mode & 0o111).map((o) => o.dest);
+
+  return { ops, conflicts, notes, fragments, agentFragments, profileDocs, dropped, prefixes, platforms, executables };
 }
 
-export function applyPlan(repo, result) {
-  for (const op of result.ops) {
-    const dest = path.join(repo, op.dest);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    if (op.kind === "copy") fs.copyFileSync(op.src, dest, fs.constants.COPYFILE_EXCL);
-    else fs.writeFileSync(dest, op.content, { flag: "wx" });
-    if (op.mode) fs.chmodSync(dest, op.mode);
+// Writes every planned file, never over an existing one. If a write fails, the
+// files written so far are removed, so a rerun starts from the same state.
+// The versions to merge go to mergeDir, outside the repo.
+export function applyPlan(repo, result, mergeDir = null) {
+  const written = [];
+  try {
+    for (const op of result.ops) {
+      const dest = path.join(repo, op.dest);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (op.kind === "copy") fs.copyFileSync(op.src, dest, fs.constants.COPYFILE_EXCL);
+      else fs.writeFileSync(dest, op.content, { flag: "wx" });
+      written.push(dest);
+      if (op.mode) fs.chmodSync(dest, op.mode);
+    }
+  } catch (err) {
+    for (const f of written.reverse()) fs.rmSync(f, { force: true });
+    throw err;
   }
+  if (!result.conflicts.length) return;
+  const dir = mergeDir || fs.mkdtempSync(path.join(os.tmpdir(), "repo-standards-merge-"));
+  const seen = new Map();
+  for (const c of result.conflicts) {
+    // Two profiles can offer the same file; number the later ones.
+    const n = (seen.get(c.dest) || 0) + 1;
+    seen.set(c.dest, n);
+    const file = path.join(dir, n === 1 ? c.dest : `${c.dest}.${n}`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (typeof c.content === "string") fs.writeFileSync(file, c.content);
+    else fs.copyFileSync(c.src, file);
+    if (c.mode) fs.chmodSync(file, c.mode);
+    c.merge = file;
+  }
+  result.mergeDir = dir;
 }
 
 // ---------------------------------------------------------------- report
@@ -534,10 +739,20 @@ export function formatReport(result, catalog, dryRun) {
   lines.push(dryRun ? "Would write:" : "Wrote:");
   for (const op of result.ops) lines.push(`  ${op.dest}`);
   if (result.conflicts.length) {
-    lines.push("", "Merge by hand (not overwritten). The catalog files named here are unchanged, so rename numbered fragment references and fill @OWNER as you merge:");
+    lines.push(
+      "",
+      dryRun
+        ? "Merge by hand (not overwritten). A real run writes the version to merge in, already renamed, filled and pruned, to a scratch directory:"
+        : `Merge by hand (not overwritten). The version to merge in, already renamed, filled and pruned, is in ${result.mergeDir}:`,
+    );
     for (const c of result.conflicts) {
-      lines.push(`  ${c.dest}${c.src ? ` <- ${rel(c.src)}` : ""} (${c.reason})`);
+      const from = c.merge ? path.relative(result.mergeDir, c.merge).split(path.sep).join("/") : c.src ? rel(c.src) : "generated";
+      lines.push(`  ${c.dest} <- ${from} (${c.reason})`);
     }
+  }
+  if (result.executables.length) {
+    lines.push("", "Keep these executable. Git on Windows doesn't see file modes, so there run git add --chmod=+x on them:");
+    for (const f of result.executables) lines.push(`  ${f}`);
   }
   if (result.agentFragments.length) {
     lines.push("", "Merge these AGENTS.md fragments into AGENTS.md:");
@@ -570,18 +785,29 @@ export function formatReport(result, catalog, dryRun) {
 
 // ---------------------------------------------------------------- cli
 
+const FLAGS = new Set(["dry-run", "json"]);
+const OPTIONS = new Set(["catalog", "repo", "profile", "package-manager", "owner", "platforms", "with", "without", "merge-dir"]);
+
 function parseArgs(argv) {
   const args = { _: [], profile: [], with: [], without: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--dry-run" || a === "--json") args[a.slice(2).replace("-", "")] = true;
-    else if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const value = argv[++i];
-      if (value === undefined) throw new Error(`${a} needs a value`);
-      if (Array.isArray(args[key])) args[key].push(value);
-      else args[key] = value;
-    } else args._.push(a);
+    if (!a.startsWith("--")) {
+      args._.push(a);
+      continue;
+    }
+    const eq = a.indexOf("=");
+    const key = eq === -1 ? a.slice(2) : a.slice(2, eq);
+    if (FLAGS.has(key)) {
+      if (eq !== -1) throw new Error(`--${key} takes no value`);
+      args[key] = true;
+      continue;
+    }
+    if (!OPTIONS.has(key)) throw new Error(`unknown option --${key}`);
+    const value = eq === -1 ? argv[++i] : a.slice(eq + 1);
+    if (value === undefined || (eq === -1 && value.startsWith("--"))) throw new Error(`--${key} needs a value`);
+    if (Array.isArray(args[key])) args[key].push(value);
+    else args[key] = value;
   }
   return args;
 }
@@ -607,19 +833,29 @@ export function main(argv) {
       with: args.with,
       without: args.without,
     });
-    if (!args.dryrun) applyPlan(repo, result);
+    if (!args["dry-run"]) applyPlan(repo, result, args["merge-dir"] ? path.resolve(args["merge-dir"]) : null);
     if (args.json) {
       const dropped = result.dropped.map(({ residue, ...d }) => d);
-      console.log(JSON.stringify({ ...result, dropped, ops: result.ops.map((o) => o.dest) }, null, 2));
-    }
-    else console.log(formatReport(result, catalog, args.dryrun));
+      const conflicts = result.conflicts.map(({ dest, reason, merge }) => ({ dest, reason, merge }));
+      console.log(JSON.stringify({ ...result, dropped, conflicts, ops: result.ops.map((o) => o.dest) }, null, 2));
+    } else console.log(formatReport(result, catalog, args["dry-run"]));
     return 0;
   }
   console.error("usage: repo-standards.mjs detect [repo] | apply --catalog <dir> --profile <name>[=<dir>] ...");
   return 2;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+// Run as a script, also through a symlink or a differently cased path.
+const self = fileURLToPath(import.meta.url);
+const invoked = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const same = (a, b) => {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return false;
+  }
+};
+if (invoked && same(invoked, self)) {
   try {
     process.exitCode = main(process.argv.slice(2));
   } catch (err) {
