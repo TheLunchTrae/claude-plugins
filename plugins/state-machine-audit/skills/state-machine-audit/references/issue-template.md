@@ -15,7 +15,8 @@ severity: <high | medium | low>
 severity_reason: <the rule from the checklist, and any raise or lower>
 labels: [<only labels the repo has, such as bug and its priority label>]
 machine: <machine name in the doc>
-confirmed_by: <how it was reproduced (test, script or full code trace), then the check (verifier could not refute | self-checked)>
+repro: <the test or script that reproduces it, kept in the audit folder, or code trace>
+checked_by: <verifier could not refute | self-checked>
 premises: <any behaviour the draft relies on that the repo asserts but you couldn't run, or none>
 ---
 

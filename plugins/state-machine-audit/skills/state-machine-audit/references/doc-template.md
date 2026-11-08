@@ -21,7 +21,7 @@ An _implicit_ state machine is state spread over fields, flags, optional values,
 
 A box in a diagram is a state and an arrow is a transition labelled with the event that causes it. `[*]` is where the machine starts or ends.
 
-<Lifetimes, if they differ between machines: which state lasts one call, one instance or reload, the whole process, or survives on disk, and what is shared between windows, clients or processes.>
+<Lifetimes, if they differ between machines: which state lasts one call, one instance or reload, the whole process, or survives on disk, and what is shared between windows, clients or processes, including processes that run with different settings against the same files.>
 
 <If the code guards against stale messages or callbacks, list each guard here: what it is, who issues it, and what it drops.>
 

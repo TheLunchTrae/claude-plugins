@@ -2,6 +2,8 @@
 
 Run every question against every machine. A "yes" is a candidate, not a finding: Step 4 confirms it.
 
+Read the machine's tests first. A test that asserts a behaviour that looks like a failure means someone chose it: set it aside unless it breaks a documented promise, and look next to it, since a deliberate behaviour often sits beside a real gap the test doesn't cover.
+
 ## Stuck states
 
 - Can a state be entered that nothing ever leaves short of a restart? Look for a flag set before an `await` or a call that can throw, and cleared only on success.
@@ -9,7 +11,7 @@ Run every question against every machine. A "yes" is a candidate, not a finding:
 - Does a page, dialog or mode have a way back for every way in? Can the user reach a screen with no control that leaves it?
 - Does a retry exist, and does it ever run? A retry that waits for an event which may never come (an idle session, a focus change, the next sample) is a stuck state.
 - Does a watcher, poll or reader detect that its source stopped producing, or does it wait forever on stale values?
-- For every deferred action (a wanted reload, a queued save, a pending retry): list each event that triggers it, and ask what happens if the condition still isn't met when that event fires. If nothing tries again, it's stuck until an unrelated event happens to come.
+- For every deferred action (a wanted reload, a queued save, a pending retry): list each event that triggers it, and ask what happens if the condition still isn't met when that event fires. If nothing tries again, it's stuck until an unrelated event happens to come. Being retried on some event isn't enough: check that the condition clearing (the terminal closing, the session finishing, the network returning) itself triggers the retry, rather than waiting for another unrelated event that may not come while the system sits idle.
 
 ## Missing exits
 
@@ -62,6 +64,7 @@ For each transition that touches the outside world (network, disk, host API, ano
 
 - Does the user, or a log, hear about every failure that changes what they'd do next?
 - Is the feedback shown on every surface the machine runs under: each client, UI, CLI, headless or API mode, platform? Feedback that lives in one client's code is silence in the others.
+- Does every entry point that reaches the same content get the same handling? A transform, check or warning applied on one path (a tool call) and not another (a slash command, a CLI flag, an API route) fails silently on the path without it.
 - Does a fallback hide that the thing they asked for didn't happen (a rerouted request, a skipped item, a default used instead)?
 
 ## Broken promises
@@ -76,6 +79,10 @@ Use the repo's priority labels if it has them, mapped like this:
 | --- | --- |
 | **High** | Data or work is lost, the wrong action runs, a security boundary is crossed, or the user is stuck with no way out inside the product. |
 | **Medium** | The feature stops working until a restart, reload or manual step, or is degraded for a whole session; the user can recover but has to know how. |
-| **Low** | Rare timing, easy recovery, cosmetic or misleading state, or a leak with no visible effect in normal use. |
+| **Low** | Easy recovery, cosmetic or misleading state, or a leak with no visible effect in normal use. |
 
-Raise one level when it's common in normal use; lower one when it needs an unusual setup. Low is the floor; something below it goes under Set aside in the report. Record the level and any adjustment in the draft's `severity_reason`.
+Silent substitution (a different model, account, file or target than the user configured, without telling them) counts as the wrong action running; with a clear notice it's degraded.
+
+A race whose window is tiny and that the code can't close (check-then-act over a host API with no atomic call) goes under Set aside, with the window named, unless it loses work.
+
+Raise one level when it's common in normal use; lower one when it needs an unusual setup or rare timing. Apply each adjustment once. Low is the floor; something below it goes under Set aside in the report. Record the level and any adjustment in the draft's `severity_reason`.

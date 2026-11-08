@@ -13,7 +13,7 @@ It produces three things:
 2. **Agent guidance** in `AGENTS.md`, so later changes keep the doc and tests in step.
 3. **One issue draft per confirmed failure**, with severity, plus a separate list of unconfirmed cases.
 
-Work in the user's working tree. Write the doc and the guidance there; never commit, push, file issues or open PRs unless the user asks. Issue drafts, notes and the report go outside the repo (see Step 6). Brief every subagent you start as read-only: no edits to tracked files, commits, pushes or issues, notes written only to the audit folder.
+Work in the user's working tree. Write the doc and the guidance there; never commit, push, file issues or open PRs unless the user asks. Issue drafts, notes and the report go outside the repo (see Step 6). Brief every subagent you start as read-only: no edits to tracked files, commits, pushes or issues, notes written only to the audit folder. Where you can't start subagents, do the same work inline; only Step 4 needs a fallback of its own.
 
 The audit is language-agnostic. Read the code as it is: the language's own idioms decide what a state looks like (a Rust `Option`, a C# nullable, a Swift optional and a TypeScript `undefined` are the same signal).
 
@@ -21,7 +21,8 @@ The audit is language-agnostic. Read the code as it is: the language's own idiom
 
 - Scope: audit the whole repo unless the user named a part. Don't stop to ask; say what you covered. For a monorepo too large to read in one pass, cover it by area with subagents (Step 1) rather than narrowing it.
 - Look for an existing state machines doc (`docs/state-machines.md`, `docs/developer/state-machines.md`, a wiki folder page, an architecture doc with a states section) and an existing `AGENTS.md` (or `CLAUDE.md`) section. If one exists, this is a **re-audit**: check the doc against the code, fix drift, and look for machines and failures it misses. Keep its format.
-- Look for linked shared conventions (an org `.github` repo's agent guidance). Follow them and link them; don't restate them.
+- Look for linked shared conventions (an org `.github` repo's agent guidance). Follow them and link them; don't restate them. If a link can't be read, note it for Step 5.
+- Read the repo's own doc rules (in `AGENTS.md`, `CONTRIBUTING.md` and the like). They win over this skill on where docs go, their audience and what stays out of them.
 - Look for a previous audit report (in the audit folder from Step 6, or wherever the user says) and read its Unconfirmed and Set aside sections, so you recheck rather than rediscover them.
 - Read existing open issues so a draft never duplicates one, and note the repo's labels for later. With the GitHub CLI: `gh api 'repos/{owner}/{repo}/issues?state=open' --paginate --jq '.[] | select(.pull_request == null) | "\(.number) \(.title)"'` and `gh api repos/{owner}/{repo}/labels --paginate --jq '.[].name'` (REST, so they also work where GraphQL is blocked). On another host (GitLab and the like), use its CLI or API if you have it; otherwise skip these reads and say so in the report.
 - Record the commit you audit (`git rev-parse HEAD`); issue drafts link code at that commit. Check that the tree is clean (`git status --porcelain`) and the commit is on the remote (`git branch -r --contains HEAD`). If not, tell the user, and say in the report that the links may not resolve or that lines may differ from the working tree.
@@ -91,12 +92,14 @@ Have a fresh subagent try to refute each confirmed candidate before it becomes a
 
 - `confirmed`: apply its corrections to steps, impact or severity, and draft it.
 - `unconfirmed`: move it to Unconfirmed with the gap the verifier named.
-- `refuted`: move it to Set aside with what prevents it. If you can't start a subagent at all, run the refutation yourself as a separate pass after all candidates are written, record it as `self-checked` in the draft, and say in the report that no independent check ran.
+- `refuted`: move it to Set aside with what prevents it.
+
+If no tool for starting subagents is available, run the refutation yourself as a separate pass after all candidates are written, record it as `checked_by: self-checked` in the draft, and say in the report that no independent check ran.
 
 ## Step 5: Write the doc and the guidance
 
 - **Doc**: follow [references/doc-template.md](references/doc-template.md). Put it where the repo keeps developer docs (`docs/developer/`, `docs/`, or a wiki source folder), or keep the existing doc's place and format. One section per machine, with its owner, states, transitions (a Mermaid `stateDiagram-v2`, a State | Event | Next table, or both) and failure states. Only confirmed failures go in the doc; unconfirmed cases stay in the report. A failure state links its issue once one exists; until then it ends with exactly `Not tracked yet.` The doc describes behaviour; it doesn't hold bug reports.
-- **Scope of the doc**: the repo's own doc rules apply to it (audience, where developer docs live, what stays out). CI and release workflows belong in it only when their state can strand a release or a user, such as a publish that half-completes; keep those sections short.
+- **Scope of the doc**: the repo's own doc rules win (audience, where developer docs live, what stays out). CI and release workflows belong in it only when their state can strand a release or a user, such as a publish that half-completes, and only as a short state table where the repo keeps release walkthroughs out of its docs. Check what the folder publishes before you write there: a `docs` folder in npm's `files`, a docs-site build or a packaged wiki ships with the product. If the repo keeps developer docs outside itself (a GitHub wiki that isn't a folder in the repo), write the doc where it fits in the repo and say in the report where it may belong instead.
 - **Guidance**: add or update the `## State machines` section of `AGENTS.md` from [references/agents-guidance.md](references/agents-guidance.md), adapted to the repo's languages and test setup. If neither `AGENTS.md` nor `CLAUDE.md` exists, create `AGENTS.md`. If the repo only has `CLAUDE.md`, put it there. If it has both and `CLAUDE.md` doesn't import `@AGENTS.md`, say in the report that Claude Code won't see the section and suggest the import. If shared org guidance already covers it, link that and keep only the repo-specific lines. If linked guidance can't be read, keep the full section and say so in the report.
 
 Show the user the doc's machine list and the guidance diff when done.
@@ -108,7 +111,9 @@ Write one draft per confirmed failure with [references/issue-template.md](refere
 Put the drafts in the audit folder, outside the repo: a folder the user names, otherwise `~/.claude/state-machine-audit/<repo>/<date>/`, which lasts across sessions so a re-audit can read it. Write:
 
 - `NN-<slug>.md` per draft, highest severity first.
-- `report.md`: the audited commit, the machine list, the drafts by severity, an **Unconfirmed** section with each case, why it's unconfirmed, and what would settle it, and a **Set aside** section with candidates you dropped and why (refuted, or no harm), so a re-audit doesn't redo them. Note anything you couldn't check, such as labels or open issues without GitHub access.
+- `report.md`: the audited commit, the machine list, the drafts by severity, an **Unconfirmed** section with each case, why it's unconfirmed, and what would settle it, a **Set aside** section with candidates you dropped and why (refuted, designed, or no harm), so a re-audit doesn't redo them, and a **Checklist record**: per machine, each checklist section with its finding or "none". Note anything you couldn't check, such as labels or open issues without GitHub access.
+
+If a file write in the audit folder is refused (some subagent sessions refuse report files), put that file's content in your reply instead and say so.
 
 Then report to the user: how many machines, the confirmed failures by severity with their titles, the unconfirmed count, and where the files are.
 
