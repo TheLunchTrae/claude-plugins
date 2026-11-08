@@ -1,0 +1,105 @@
+---
+name: state-machine-audit
+description: Audit a codebase for implicit state machines (flags, status fields, nullable or optional fields, caches, async and thread lifecycles, timers, UI flows, files on disk) and their failure states. Maps each machine, writes a state machines doc and AGENTS.md guidance, and drafts one issue per confirmed failure. Use when asked to audit state machines, failure states, stuck or lost states, or races, or to document how a system's state moves.
+---
+
+# State machine audit
+
+An implicit state machine is state that no type names: a few fields, flags, optional values, maps, timers, tasks or files, plus the code that changes them. The audit finds each one, writes down its states and transitions, and looks for the states a user or the system can reach and not get out of cleanly.
+
+It produces three things:
+
+1. **A state machines doc** in the repo, mapping every machine.
+2. **Agent guidance** in `AGENTS.md`, so later changes keep the doc and tests in step.
+3. **One issue draft per confirmed failure**, with severity, plus a separate list of unconfirmed cases.
+
+Work in the user's working tree. Write the doc and the guidance there; never commit, push, file issues or open PRs unless the user asks. Issue drafts go outside the repo (see Step 6).
+
+The audit is language-agnostic. Read the code as it is: the language's own idioms decide what a state looks like (a Rust `Option`, a C# nullable, a Swift optional and a TypeScript `undefined` are the same signal).
+
+## Step 0: Scope and what exists
+
+- Agree the scope with the user if the repo is large or holds several apps: whole repo, one package, or one flow. Default to the whole repo and say so.
+- Look for an existing state machines doc (`docs/state-machines.md`, `docs/developer/state-machines.md`, a wiki folder page, an architecture doc with a states section) and an existing `AGENTS.md` (or `CLAUDE.md`) section. If one exists, this is a **re-audit**: check the doc against the code, fix drift, and look for machines and failures it misses. Keep its format.
+- Look for linked shared conventions (an org `.github` repo's agent guidance). Follow them and link them; don't restate them.
+- Read existing open issues so a draft never duplicates one, and note the repo's labels for later. With the GitHub CLI: `gh api 'repos/{owner}/{repo}/issues?state=open' --paginate --jq '.[] | select(.pull_request == null) | "\(.number) \(.title)"'` and `gh api repos/{owner}/{repo}/labels --paginate --jq '.[].name'` (REST, so they also work where GraphQL is blocked).
+- Record the commit you audit (`git rev-parse HEAD`); issue drafts link code at that commit.
+
+## Step 1: Inventory the machines
+
+Find every candidate. [references/finding-machines.md](references/finding-machines.md) lists the signals to search for and the search patterns by language. In short:
+
+- Status, phase, mode or kind fields and enums, and booleans that change over time (`isLoading`, `started`, `dirty`, `pending`).
+- Nullable or optional fields that are set and cleared (a handle, a current session, a pending promise).
+- Caches and memoized promises, especially ones that keep a failure or never evict.
+- Async lifecycles: tasks, promises, threads, subscriptions, timers, retries, watchers, child processes, and their cancellation.
+- UI flows: pages, dialogs, wizards, forms with unsaved edits, navigation stacks.
+- Persisted state: files, keychain or kv entries, databases, lock files, temp files, and anything that outlives the process.
+- Messages between threads or processes, and the IDs or generations that guard against stale ones.
+
+Group fields that change together into one machine. A machine is named for what it tracks ("Sign-in", "Capture slot", "Snippet capture cache"), and owned by a file and symbol.
+
+For a large repo, split the inventory across parallel subagents by area, each returning machines with their owner, fields and transition sites. Merge duplicates yourself.
+
+## Step 2: Map each machine
+
+For each machine write down:
+
+- **Owner**: file and symbol (no line numbers in the doc; they rot).
+- **States**: the named states, including the ones the code only implies (a flag pair that can be `true/true` is a state even if nothing expects it).
+- **Transitions**: each event that moves it (call, message, timer, callback, user action, process start or exit) and where it goes.
+- **Start and end**: where it starts, and whether it ever ends (process exit, dispose, reload).
+- **Guards**: what drops stale events (session IDs, generations, checkpoints, abort signals).
+
+Trace transitions from the code, not from names or comments. Every claim cites the code that makes it true.
+
+## Step 3: Look for failure states
+
+Check every machine against [references/failure-checklist.md](references/failure-checklist.md). The main kinds:
+
+- **Stuck**: a reachable state with no way out short of a restart (a cache that keeps a rejection, a flag never cleared on error, a page with no way back).
+- **Missing exits**: no error, cancel, timeout or retry path where the outside world can fail or the user can leave.
+- **Lost work**: a transition that drops unsaved edits, a pending write, or a result in hand (a refreshed token the store refused).
+- **Races and ordering**: overlapping work, events arriving in either order, stale messages acting on a newer state, check-then-act across an await.
+- **Impossible combinations**: field values that name no state but are reachable.
+- **Leaks and outliving**: resources, listeners, windows, files or processes not released, or state that outlives its process or owner.
+- **Unreachable or dead states**: a state the code handles that nothing can reach, which usually means a missing transition elsewhere.
+- **Silent failure**: a failure the user never hears about, so they can't recover.
+
+Write each candidate as: the machine, how to reach the state (numbered steps), the code at each step, what goes wrong, and who sees it.
+
+## Step 4: Confirm or set aside
+
+Each candidate is confirmed or unconfirmed, never guessed into an issue.
+
+- **Confirmed**: reproduced by a test or script you ran (preferred, and kept out of the repo unless asked), or traced step by step through the code with every step cited, and an independent check didn't refute it.
+- **Unconfirmed**: depends on host, platform or timing behaviour you couldn't check, on intent the code doesn't settle ("should a held rule fire after its cooldown?"), or on a step you couldn't trace.
+
+Have a fresh subagent try to refute each confirmed candidate before it becomes a draft: the plugin's `state-machine-verifier` agent (or, if it isn't available, a fresh general-purpose agent given that agent's instructions), handed the candidate and the code, not your reasoning. Verifiers for different candidates can run in parallel. A refuted candidate is dropped or moved to unconfirmed with the reason.
+
+## Step 5: Write the doc and the guidance
+
+- **Doc**: follow [references/doc-template.md](references/doc-template.md). Put it where the repo keeps developer docs (`docs/developer/`, `docs/`, or a wiki source folder), or keep the existing doc's place and format. One section per machine, with its owner, states, transitions (a Mermaid `stateDiagram-v2`, a State | Event | Next table, or both) and failure states. A failure state links its issue once one exists; until then it says it's untracked. The doc describes behaviour; it doesn't hold bug reports.
+- **Guidance**: add or update the `## State machines` section of `AGENTS.md` from [references/agents-guidance.md](references/agents-guidance.md), adapted to the repo's languages and test setup. If the repo only has `CLAUDE.md`, put it there. If shared org guidance already covers it, link that and keep only the repo-specific lines.
+
+Show the user the doc's machine list and the guidance diff when done.
+
+## Step 6: Draft the issues
+
+Write one draft per confirmed failure with [references/issue-template.md](references/issue-template.md): a title that names the symptom, how it happens, where in the code (permalinks at the audited commit), impact, severity, and a fix direction. Don't merge two failures into one draft because they share a machine; do merge one failure that shows up in two machines.
+
+Put the drafts outside the repo: in a folder the user names, otherwise `state-machine-audit/<repo>/` under the system temp directory. Write:
+
+- `NN-<slug>.md` per draft, highest severity first.
+- `report.md`: the audited commit, the machine list, the drafts by severity, and an **Unconfirmed** section with each case, why it's unconfirmed, and what would settle it.
+
+Then report to the user: how many machines, the confirmed failures by severity with their titles, the unconfirmed count, and where the files are.
+
+## Step 7: Only when the user asks
+
+- **File the issues**: one per draft, its body without the front matter, with only labels the repo already has (map severity to its priority labels if it has them, and `bug` if it has it). Then replace "untracked" in the doc with each issue's link.
+- **Fix them**: one PR per issue, each starting with a failing test for the failure, following the repo's PR rules (the `pr-workflow` plugin if it's installed). A fix updates the doc's section and removes the failure note in the same PR.
+
+## Re-audits and drift
+
+On a repo that already has a doc, also report: machines in the code the doc misses, sections whose states or transitions no longer match, and failure notes whose issue is closed but which the doc still lists (or the reverse). Fix the doc's drift in the working tree; failures still follow Steps 4 and 6.

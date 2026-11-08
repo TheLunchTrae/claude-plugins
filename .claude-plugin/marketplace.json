@@ -7,6 +7,11 @@
       "name": "pr-workflow",
       "source": "./plugins/pr-workflow",
       "description": "Pull request workflow: draft first, independent reviewer loop, ready after approval, and a Stop hook that keeps sessions from ending a turn mid-review."
+    },
+    {
+      "name": "state-machine-audit",
+      "source": "./plugins/state-machine-audit",
+      "description": "Audit a codebase for implicit state machines and their failure states, with a state machines doc, agent guidance and one issue draft per confirmed failure."
     }
   ]
 }
