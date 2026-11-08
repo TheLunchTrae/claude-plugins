@@ -3,7 +3,7 @@ name: pr-workflow
 description: Rules for opening, reviewing and handing over pull requests. Load before committing, pushing, opening or updating a PR, or when finishing work that ends in a PR.
 ---
 
-# PR workflow
+# PR Workflow
 
 Follow every rule here for every PR you open or update. The user merges; you never merge, approve, or close a PR they didn't ask you to close.
 
@@ -22,7 +22,7 @@ Follow every rule here for every PR you open or update. The user merges; you nev
 
 ## Review loop (required before "ready")
 
-1. Start a **separate reviewer subagent** (a fresh agent, not a fork of you and not yourself). Give it the PR URL or diff and the repo's standards, not your own conclusions.
+1. Start a **separate reviewer subagent** (a fresh agent, not a fork of you and not yourself). Give it the PR URL or diff and the repo's standards, not your own conclusions. Ask it to check state machines too: for every flag, status field, nullable field, cache, async or timer lifecycle, or UI flow the diff adds or changes, look for states that can get stuck, be lost or race, and for paths that enter or leave a state while skipping its usual handling. For a full audit of a codebase, use the State Machine Audit plugin (`state-machine-audit`) instead.
 2. Fix every significant finding. Skip a finding only with a stated reason.
 3. Have the reviewer **re-check the fixes**. Repeat 2 and 3 until it reports nothing significant.
 4. Only then mark the PR ready for review and report it.

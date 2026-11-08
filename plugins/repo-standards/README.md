@@ -1,4 +1,4 @@
-# repo-standards
+# Repo Standards
 
 I use this Claude Code plugin to set up formatting, linting, tests and CI gates in a repository from the [KrishRVH/standards](https://github.com/KrishRVH/standards) catalog. It applies only the profiles the repo uses, with the changes I make to the catalog's defaults in my own repos.
 

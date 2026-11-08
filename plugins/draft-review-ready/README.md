@@ -1,19 +1,32 @@
-# pr-workflow
+# Draft-Review-Ready PR Workflow
 
-A Claude Code plugin for a strict pull request workflow: every PR opens as a draft, gets an independent reviewer agent with a fix and re-check loop, and is marked ready only after the reviewer approves. A Stop hook keeps the session from ending its turn while that loop is unfinished.
+I use this Claude Code plugin for a strict pull request workflow: every PR opens as a draft, gets an independent reviewer agent with a fix and re-check loop, and is marked ready only after the reviewer approves. The reviewer also checks the state machines the diff adds or changes; for a full audit I use [State Machine Audit](../state-machine-audit). A Stop hook keeps the session from ending its turn while that loop is unfinished.
 
 Install:
 
 ```
 /plugin marketplace add TheLunchTrae/claude-plugins
-/plugin install pr-workflow@thelunchtrae
+/plugin install draft-review-ready@thelunchtrae
 ```
+
+The skill runs as `/draft-review-ready:pr-workflow`.
 
 Requires Node 18 or later on `PATH` (the hooks are one dependency-free Node script). Works on macOS, Linux and Windows (Git Bash or PowerShell).
 
+## Renamed from pr-workflow
+
+This plugin used to be called `pr-workflow`. The marketplace maps the old name to `draft-review-ready`, so on Claude Code v2.1.193 or later an existing install moves to the new name by itself after `/plugin marketplace update thelunchtrae` and a new session. If `/plugin` then says the plugin isn't cached, run `/plugin install draft-review-ready@thelunchtrae` once. On an older Claude Code, uninstall it and install the new one:
+
+```
+/plugin uninstall pr-workflow@thelunchtrae
+/plugin install draft-review-ready@thelunchtrae
+```
+
+The skill is still called `pr-workflow`, so it's now `draft-review-ready:pr-workflow`. The marker lines, `PR_WORKFLOW_*` variables and the `~/.claude/pr-workflow/` state folder keep their names, so nothing else changes.
+
 ## What's in it
 
-- `skills/pr-workflow/SKILL.md`: the rules agents follow for issues, commits, PR descriptions, the review loop, stacked PRs, visual changes and links.
+- `skills/pr-workflow/SKILL.md`: the rules agents follow for issues, commits, PR descriptions, the review loop (including what the reviewer checks), stacked PRs, visual changes and links.
 - `hooks/hooks.json` and `scripts/pr-workflow.mjs`: the hooks that track review state and block stopping.
 
 ## How the hook decides

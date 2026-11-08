@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// pr-workflow hooks. No dependencies; Node 18+.
+// Draft-Review-Ready PR Workflow hooks. No dependencies; Node 18+.
 //
 // Hook modes (read the hook payload as JSON on stdin):
 //   post-tool-use          record PRs this session opens, readies, merges or closes,
