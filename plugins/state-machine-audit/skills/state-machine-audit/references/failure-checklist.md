@@ -2,7 +2,7 @@
 
 Run every question against every machine. A "yes" is a candidate, not a finding: Step 4 confirms it.
 
-Read the machine's tests first. A test that asserts a behaviour that looks like a failure is evidence that someone chose it, not proof: tests also pin bugs. Set the case aside as designed only when it's Medium or Low and the test or a comment gives the reason; a High case goes to Unconfirmed, quoting the test, so the user decides. Either way, look next to it, since a deliberate behaviour often sits beside a real gap the test doesn't cover.
+Read the machine's tests first. A test that asserts a behaviour that looks like a failure is evidence that someone chose it, not proof: tests also pin bugs. Set the case aside as designed only when it's Medium or Low and the test or a comment gives the reason; a High case goes to Unconfirmed, quoting the test, so the user decides. A case whose test gives no reason stays a normal candidate. Either way, look next to it, since a deliberate behaviour often sits beside a real gap the test doesn't cover.
 
 ## Stuck states
 

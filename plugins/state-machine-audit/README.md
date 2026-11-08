@@ -19,7 +19,7 @@ Then ask for it in plain words ("audit this repo for state machines and failure 
 4. Writes a state machines doc (one section per machine, Mermaid diagrams or transition tables, failure notes) and a `## State machines` section in `AGENTS.md` that keeps later changes, tests and the doc in step.
 5. Writes one issue draft per confirmed failure, with severity, steps, permalinks at the audited commit, impact and a fix direction, plus a `report.md` with the unconfirmed and set-aside cases. A later re-audit reads that report first.
 
-In your working tree it changes only the state machines doc and the agent guidance (`AGENTS.md`, or `CLAUDE.md` when that's the repo's only agent file); repro tests it can't run from outside the repo are untracked scratch files, deleted when it's done. Drafts, notes and the report go to `${XDG_STATE_HOME:-~/.local/state}/state-machine-audit/<owner>-<repo>/<date>-<short sha>/` unless you name another folder. It files issues, commits, or opens fix PRs only when you ask; fix PRs follow the `pr-workflow` plugin when it's installed.
+In your working tree it changes only the state machines doc and the agent guidance (`AGENTS.md`, or `CLAUDE.md` when that's the repo's only agent file); repro tests it can't run from outside the repo are untracked scratch files, deleted when it's done. Drafts, notes and the report go to `${XDG_STATE_HOME:-$HOME/.local/state}/state-machine-audit/<owner>-<repo>/<date>-<short sha>/` unless you name another folder. It files issues, commits, or opens fix PRs only when you ask; fix PRs follow the `pr-workflow` plugin when it's installed.
 
 On a repo that already has a state machines doc, it re-audits: fixes drift between the doc and the code, and looks for machines and failures the doc misses.
 
