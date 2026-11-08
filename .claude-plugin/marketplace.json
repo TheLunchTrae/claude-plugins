@@ -20,6 +20,12 @@
       "displayName": "Repo Standards",
       "source": "./plugins/repo-standards",
       "description": "Sets up formatting, linting, tests and CI gates in a repo from the KrishRVH/standards catalog, applying only the profiles the repo uses."
+    },
+    {
+      "name": "my-skills",
+      "displayName": "Trae's Skills",
+      "source": "./plugins/my-skills",
+      "description": "My general-purpose skills, in one plugin so they come with me to any session."
     }
   ],
   "renames": {
