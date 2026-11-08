@@ -30,8 +30,9 @@ Each skill runs when a request matches its description, or by name as `/my-skill
    `name` matches the folder name. Claude reads `description` to decide when to load the skill, so name the situations it's for.
 3. Put any files the skill needs (references, templates, scripts) in the same folder, and point to them from `SKILL.md` by relative path, or with `${CLAUDE_SKILL_DIR}` in a command.
 4. Bump `version` in `.claude-plugin/plugin.json`. Installed copies only pick up changes when the version changes.
-5. Check it with `claude plugin validate plugins/my-skills` from the repo root.
+5. List it under What's in it below.
+6. Check it with `claude plugin validate plugins/my-skills` from the repo root.
 
 ## What's in it
 
-- `skills/`: one folder per skill. It's empty for now.
+- `skills/ci-cleanup/SKILL.md`: a checklist of common CI pitfalls (job dependencies, clone size, superseded runs, completion events instead of polling, and flaky tests) to find and fix when cleaning up or de-flaking CI.
