@@ -2,7 +2,7 @@
 
 Run every question against every machine. A "yes" is a candidate, not a finding: Step 4 confirms it.
 
-Read the machine's tests first. A test that asserts a behaviour that looks like a failure means someone chose it: set it aside unless it breaks a documented promise, and look next to it, since a deliberate behaviour often sits beside a real gap the test doesn't cover.
+Read the machine's tests first. A test that asserts a behaviour that looks like a failure is evidence that someone chose it, not proof: tests also pin bugs. Set the case aside as designed only when it's Medium or Low and the test or a comment gives the reason; a High case goes to Unconfirmed, quoting the test, so the user decides. Either way, look next to it, since a deliberate behaviour often sits beside a real gap the test doesn't cover.
 
 ## Stuck states
 
@@ -83,6 +83,6 @@ Use the repo's priority labels if it has them, mapped like this:
 
 Silent substitution (a different model, account, file or target than the user configured, without telling them) counts as the wrong action running; with a clear notice it's degraded.
 
-A race whose window is tiny and that the code can't close (check-then-act over a host API with no atomic call) goes under Set aside, with the window named, unless it loses work.
+A race whose window is tiny and that the code can't close (check-then-act over a host API with no atomic call) goes under Set aside, unless it would be High. The entry names the window and says why no mitigation is practical: re-checking after the act, a retry, a lock, or an idempotent write.
 
 Raise one level when it's common in normal use; lower one when it needs an unusual setup or rare timing. Apply each adjustment once. Low is the floor; something below it goes under Set aside in the report. Record the level and any adjustment in the draft's `severity_reason`.
