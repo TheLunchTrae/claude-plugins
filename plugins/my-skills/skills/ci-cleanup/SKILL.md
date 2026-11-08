@@ -26,27 +26,28 @@ Jobs that must run in order say so with the CI system's own dependencies, not wi
 Every job's checkout costs time. Fetch the least history and the fewest files the job uses.
 
 - Look for: full history fetched without a reason (`fetch-depth: 0`, a large `GIT_DEPTH`); submodules or Git LFS files fetched by jobs that don't use them; a checkout in jobs that only use artifacts, call an API or post a comment; whole-repo checkouts for a job that reads one folder.
-- Fix with: a shallow clone (`fetch-depth: 1` is the `actions/checkout` default; `GIT_DEPTH` in GitLab). Keep full history only for jobs that read it (tags for versioning, changelogs, diffs against the base branch), and say why in a comment. Turn off `submodules` and `lfs` where unused. Skip the checkout entirely where the job doesn't need the source (`GIT_STRATEGY: none` in GitLab, no checkout step in GitHub Actions). Use `sparse-checkout` for jobs that need only part of the tree.
+- Fix with: a shallow clone (`fetch-depth: 1` is the `actions/checkout` default; `GIT_DEPTH` in GitLab). In GitLab, keep a small depth (the default is 20) rather than 1: runners fetch by branch, so a queued or retried job fails once the branch moves past its commit. Keep full history only for jobs that read it (tags for versioning, changelogs, diffs against the base branch), and say why in a comment. Turn off submodules and LFS where unused (the `submodules` and `lfs` inputs of `actions/checkout`; `GIT_SUBMODULE_STRATEGY: none` and `GIT_LFS_SKIP_SMUDGE: 1` in GitLab). Skip the checkout entirely where the job doesn't need the source (`GIT_STRATEGY: none` in GitLab, no checkout step in GitHub Actions). Use `sparse-checkout` for jobs that need only part of the tree.
 
 ## 3. Cancel superseded runs
 
 When a new commit lands on a branch, the checks still running for the old commit are wasted.
 
 - Look for: workflows or pipelines with no concurrency or auto-cancel setting, so every push to a PR runs to the end.
-- Fix with: in GitHub Actions, a `concurrency` group per workflow and ref with `cancel-in-progress` on for pull requests, for example `group: ${{ github.workflow }}-${{ github.ref }}` and `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. In GitLab, `interruptible: true` on check jobs and `workflow: auto_cancel: on_new_commit: interruptible`. Leave deploy, release and publish jobs uncancellable; queue them in their own concurrency group instead.
+- Fix with: in GitHub Actions, a `concurrency` group per workflow and ref on check workflows or check jobs only, with `cancel-in-progress` on for pull requests, for example `group: ${{ github.workflow }}-${{ github.ref }}` and `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. In GitLab, `interruptible: true` on check jobs and `workflow: auto_cancel: on_new_commit: interruptible`.
+- Keep deploy, release and publish jobs out of those groups. A GitHub Actions concurrency group holds one pending run by default and a newer one replaces it, so a shared or default group still drops pending deploys. Give them their own group with `cancel-in-progress: false` and `queue: max` (which can't be combined with `cancel-in-progress: true`, and may be missing on older GitHub Enterprise Server); in GitLab, leave them without `interruptible`.
 
 ## 4. Use completion events or webhooks for work outside CI
 
 When something outside CI has to happen after a run (a deploy, a release, a notification, another system picking up a result), the run's completion should trigger it.
 
 - Look for: a CI job that stays alive, sleeping or polling, until an outside system finishes; an outside service or script that polls the CI API on a timer to learn whether a run finished; a job that polls an outside system's status when that system offers a callback.
-- Fix with: the CI system's completion events (`workflow_run` with `types: [completed]`, `check_suite` or `deployment_status` in GitHub Actions; pipeline and job webhooks or downstream triggers in GitLab) or a repository webhook, so the outside work starts when the run ends. Where an outside system offers a webhook or callback, use it instead of a polling job.
+- Fix with: the CI system's completion events, so the outside work starts when the run ends. In GitHub Actions, a workflow can start on `workflow_run` with `types: [completed]` (only when that workflow file is on the default branch) or `deployment_status`; an outside system subscribes to the repository's `workflow_run` or `workflow_job` webhooks. Don't use the `check_suite` or `check_run` triggers for this: they don't fire for suites GitHub Actions creates. In GitLab, use pipeline and job webhooks or downstream triggers. Where an outside system offers a webhook or callback, use it instead of a polling job.
 
 ## 5. Quarantine flaky tests
 
 A test that sometimes fails for reasons unrelated to the change teaches everyone to ignore red CI.
 
-- Quarantine it, don't delete it: move it to a non-blocking job, or mark it skipped with the runner's own skip or tag mechanism, with a link to an issue that tracks the fix. Keep running it where it can't block merges, so the fix can be checked.
+- Quarantine it, don't delete it: tag it with the runner's own tag or group mechanism, leave that tag out of the required job, and run the tagged tests in a job that can't block a merge (a job that isn't a required check, or `continue-on-error: true` in GitHub Actions; `allow_failure: true` in GitLab), so the fix can be checked. Link each quarantined test to an issue that tracks the fix.
 - Before a test becomes part of a required check, prove it isn't flaky:
   - **Run it repeatedly**: many times in a row, using the runner's repeat option (`go test -count=N`) or a shell loop. One pass proves little.
   - **Run it alongside other tests**: in the full suite, in parallel and in random order (`go test -shuffle=on`, PHPUnit `--order-by=random`, Jest `--randomize`, Vitest `--sequence.shuffle`), not only on its own. A test that passes alone and fails in the suite depends on order or shared state.
