@@ -19,14 +19,15 @@ Never delete a branch that open PRs still target, except through GitHub's own de
 
 Before the user merges each PR in the stack, after the one below it has merged:
 
-1. Fetch the default branch and rebase the PR's branch onto it, dropping the base's original commits. Use the base PR's last head commit as the upstream, since its branch may already be deleted: `git rebase --onto origin/<default> "$(gh api repos/{owner}/{repo}/pulls/<base-pr> --jq .head.sha)" <branch>`.
-2. Push the rebased branch with `git push --force-with-lease`. If branch rules block force-pushes, merge the default branch into the PR's branch instead.
-3. Check the PR's base (`gh api repos/{owner}/{repo}/pulls/<n> --jq .base.ref`). If it isn't the default branch yet, retarget it: `gh api -X PATCH repos/{owner}/{repo}/pulls/<n> -f base=<default>`.
-4. Resolve conflicts, rerun the checks, and confirm the PR's diff now shows only its own changes.
+1. Check whether branch rules allow force-pushes to the PR's branch. If they don't, skip steps 2 and 3 and merge the default branch into the PR's branch instead.
+2. Fetch the default branch and rebase the PR's branch onto it, dropping the base's original commits. Use the base PR's last head commit as the upstream, since its branch may already be deleted: `git rebase --onto origin/<default> "$(gh api repos/{owner}/{repo}/pulls/<base-pr> --jq .head.sha)" <branch>`.
+3. Push the rebased branch with `git push --force-with-lease`.
+4. Check the PR's base (`gh api repos/{owner}/{repo}/pulls/<n> --jq .base.ref`). If it isn't the default branch yet, retarget it: `gh api -X PATCH repos/{owner}/{repo}/pulls/<n> -f base=<default>`.
+5. Resolve conflicts, rerun the checks, and confirm the PR's diff now shows only its own changes.
 
 ## 3. Check against the default branch before "ready"
 
-- Before calling any PR ready, fetch the current default branch and confirm the PR merges cleanly and its checks pass on the latest head. From the API: `mergeable` is `true` and `mergeable_state` isn't `dirty` (or `behind`, where the branch must be up to date). `blocked` only means it waits on reviews or required checks. While `mergeable` is `null` or the state is `unknown`, GitHub is still computing it, so ask again shortly. A local trial merge (`git merge --no-commit --no-ff origin/<default>`) also works.
+- Before calling any PR ready, fetch the current default branch and confirm the PR merges cleanly and its checks pass on the latest head. From the API: `mergeable` is `true` and `mergeable_state` isn't `dirty` (or `behind`, where the branch must be up to date). `blocked` only means it waits on reviews or required checks. While `mergeable` is `null` or the state is `unknown`, GitHub is still computing it, so ask again shortly. A local trial merge (`git merge --no-commit --no-ff origin/<default>`, then `git merge --abort`) also works.
 - After any PR merges, re-check every other open PR the same way. Fix conflicts by rebasing onto the default branch, or by merging it in when branch rules block force-pushes. Tell the user which PRs changed.
 
 ## 4. Make publishable PRs release-ready
