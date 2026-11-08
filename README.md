@@ -13,7 +13,7 @@ My Claude Code plugins, published as a plugin marketplace named `thelunchtrae`.
 
 Plugins update when their `version` in `plugin.json` changes. Turn on auto-update for this marketplace in `/plugin`, or run `/plugin marketplace update thelunchtrae`.
 
-`pr-workflow` is now `draft-review-ready`. If you installed it under the old name, see [Renamed from pr-workflow](plugins/draft-review-ready#renamed-from-pr-workflow).
+`pr-workflow` is now `draft-review-ready`. If you installed it under the old name, see [Renamed from pr-workflow](plugins/draft-review-ready/README.md#renamed-from-pr-workflow).
 
 ## Plugins
 

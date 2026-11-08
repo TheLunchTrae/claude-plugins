@@ -15,14 +15,15 @@ Requires Node 18 or later on `PATH` (the hooks are one dependency-free Node scri
 
 ## Renamed from pr-workflow
 
-This plugin used to be called `pr-workflow`. The marketplace maps the old name to `draft-review-ready`, so on Claude Code v2.1.193 or later an existing install moves to the new name by itself after `/plugin marketplace update thelunchtrae` and a new session. If `/plugin` then says the plugin isn't cached, run `/plugin install draft-review-ready@thelunchtrae` once. On an older Claude Code, uninstall it and install the new one:
+This plugin used to be called `pr-workflow`. The marketplace maps the old name to `draft-review-ready`, so on Claude Code v2.1.193 or later an existing install moves to the new name by itself after `/plugin marketplace update thelunchtrae` and a new session. If `/plugin` then says the plugin isn't cached, run `/plugin install draft-review-ready@thelunchtrae` once. On an older Claude Code, update the marketplace, uninstall it and install the new one:
 
 ```
+/plugin marketplace update thelunchtrae
 /plugin uninstall pr-workflow@thelunchtrae
 /plugin install draft-review-ready@thelunchtrae
 ```
 
-The skill is still called `pr-workflow`, so it's now `draft-review-ready:pr-workflow`. The marker lines, `PR_WORKFLOW_*` variables and the `~/.claude/pr-workflow/` state folder keep their names, so nothing else changes.
+The skill name, marker lines, `PR_WORKFLOW_*` variables and the `~/.claude/pr-workflow/` state folder keep their names, so nothing else changes.
 
 ## What's in it
 
