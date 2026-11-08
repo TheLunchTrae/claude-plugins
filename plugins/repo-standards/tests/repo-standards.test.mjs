@@ -1,0 +1,284 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  applyPlan,
+  buildMiseConfig,
+  detect,
+  parseProfiles,
+  plan,
+  pruneCodeowners,
+  rewriteFragmentNames,
+} from "../skills/repo-standards/scripts/repo-standards.mjs";
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "repo-standards-"));
+
+function write(root, rel, content, mode) {
+  const file = path.join(root, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+  if (mode) fs.chmodSync(file, mode);
+}
+
+const CATALOG_CONFIG = `# header
+min_version = "2026.9.16"
+
+[settings]
+lockfile = true
+
+[tools]
+gitleaks = "8.30.1"
+syft = "1.55.0"
+
+[tasks.secrets]
+run = "gitleaks dir ."
+
+[tasks.sbom]
+run = "syft scan"
+
+[tasks._dispatch]
+run = """
+[ -f Cargo.toml ] && echo rust
+[tasks.fake]
+"""
+
+[tasks.fmt]
+run = [{ task = "_dispatch", args = ["fmt"] }]
+
+[tasks."standards:check"]
+depends = ["secrets", "hygiene"]
+`;
+
+// A small catalog with the real layout: manifest, shared, Mise, and two
+// profiles whose files exercise examples, optional groups and CODEOWNERS.
+function makeCatalog() {
+  const c = tmp();
+  write(c, "standards.manifest.toml", `[profiles.ts]
+name = "TypeScript"
+template = "TS"
+task_prefix = "ts"
+task_fragment = "20-ts.toml"
+mirror = ["x"]
+
+[profiles.rust]
+name = "Rust"
+template = "Rust"
+task_prefix = "rust"
+task_fragment = "20-rust.toml"
+
+[profiles.csharp]
+template = "C#"
+task_prefix = "csharp"
+task_fragment = "20-csharp.toml"
+`);
+  for (const f of [".gitattributes", ".gitleaks.toml"]) write(c, `shared/${f}`, `${f}\n`);
+  write(c, "shared/.gitignore", ".stryker-tmp/\n");
+  write(c, "shared/AGENTS.md", "# Agent Guide\n");
+  write(c, "Mise/config.toml", CATALOG_CONFIG);
+  write(c, "Mise/tasks/hygiene", "#!/usr/bin/env python3\n", 0o755);
+  write(c, "Mise/conf.d/20-ts.toml", `[tasks."ts:lint"]\nrun = "bun run lint"\n\n[tasks."ts:mutants"]\nrun = "bun scripts/run-stryker.mjs full"\n\n[tasks."ts:standards:check"]\ndepends = ["ts:mutants"]\n`);
+  write(c, "Mise/conf.d/20-rust.toml", `[tasks."rust:lint"]\nrun = "cargo clippy"\n`);
+  write(c, "Mise/conf.d/20-csharp.toml", `[tasks."csharp:lint"]\nrun = "dotnet build"\n`);
+  write(c, "TS/README.md", "catalog docs\n");
+  write(c, "TS/AGENTS.md", "## TypeScript\n");
+  write(c, "TS/.oxlintrc.json", "{}\n");
+  write(c, "TS/package.json", "{}\n");
+  write(c, "TS/bunfig.toml", "[install]\n");
+  write(c, "TS/bun.lock", "lock\n");
+  write(c, "TS/src/main.ts", "example\n");
+  write(c, "TS/stryker.config.mjs", "export default {}\n");
+  write(c, "TS/scripts/run-stryker.mjs", "\n");
+  write(c, "TS/.github/pull_request_template.md", "### How did you verify your code works?\n");
+  write(c, "TS/.github/workflows/quality.yml", "key: ${{ hashFiles('.config/mise/conf.d/20-ts.toml') }}\n");
+  write(c, "TS/.github/CODEOWNERS", "# The enforcement surface. Replace @OWNER with a real human owner. The leading\n* @OWNER\n/stryker.config.mjs @OWNER\n/bunfig.toml @OWNER\n/package.json @OWNER\n");
+  write(c, "Rust/Cargo.toml", "[workspace]\n");
+  write(c, "Rust/tests/lint_wall.rs", 'const TASK_FRAGMENT: &str = ".config/mise/conf.d/20-rust.toml";\n');
+  write(c, "Rust/.github/CODEOWNERS", "* @OWNER\n");
+  write(c, "C#/Directory.Build.props", "<Project />\n");
+  write(c, "C#/.github/workflows/quality.yml", "csharp\n");
+  return c;
+}
+
+const run = (repo, opts) => {
+  const result = plan({ catalog: opts.catalog, repo, ...opts });
+  applyPlan(repo, result);
+  return result;
+};
+const read = (root, rel) => fs.readFileSync(path.join(root, rel), "utf8");
+const has = (root, rel) => fs.existsSync(path.join(root, rel));
+
+test("fragment names lose their number prefix, in names and in references", () => {
+  assert.equal(rewriteFragmentNames("read .config/mise/conf.d/20-rust.toml and 10-dagger.toml"), "read .config/mise/conf.d/rust.toml and dagger.toml");
+  assert.equal(rewriteFragmentNames("version 2026-10.toml stays"), "version 2026-10.toml stays");
+});
+
+test("mise config drops syft, sbom and the dispatcher and names the profiles", () => {
+  const { text, unknown } = buildMiseConfig(CATALOG_CONFIG, ["ts", "rust"], ["linux-x64", "windows-x64"]);
+  assert.doesNotMatch(text, /syft|sbom|_dispatch|\[tasks\.fake\]/);
+  assert.match(text, /lockfile = true\nlockfile_platforms = \["linux-x64", "windows-x64"\]/);
+  // Profiles run in order, after secrets and hygiene, as the catalog runs them.
+  assert.match(text, /\[tasks\.fmt\]\ndescription = "Format the project"\nrun = \[\{ task = "ts:fmt" \}, \{ task = "rust:fmt" \}\]/);
+  assert.match(text, /\[tasks\."standards:check"\]\ndescription = "Run the standards CI gate"\ndepends = \["secrets", "hygiene"\]\nrun = \[\{ task = "ts:standards:check" \}, \{ task = "rust:standards:check" \}\]/);
+  assert.doesNotMatch(text, /depends = \[[^\]]*:fmt/);
+  assert.match(text, /gitleaks = "8\.30\.1"/);
+  assert.match(text, /^# header\nmin_version/);
+  assert.deepEqual(unknown, []);
+});
+
+test("an unknown table in the catalog config is kept and reported", () => {
+  const { text, unknown } = buildMiseConfig(`${CATALOG_CONFIG}\n[env]\nFOO = "1"\n`, ["rust"], ["linux-x64"]);
+  assert.match(text, /\[env\]\nFOO = "1"/);
+  assert.deepEqual(unknown, ["[env]"]);
+});
+
+test("apply writes the baseline with Trae's files and plain names", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  run(repo, { catalog, profiles: parseProfiles(["ts", "rust"]), packageManager: "bun", owner: "@trae" });
+  assert.equal(read(repo, "CLAUDE.md"), "@AGENTS.md\n");
+  assert.match(read(repo, ".github/pull_request_template.md"), /^### What does this PR do\?\n/);
+  assert.doesNotMatch(read(repo, ".github/pull_request_template.md"), /verify/);
+  assert.ok(has(repo, ".config/mise/conf.d/ts.toml"));
+  assert.ok(has(repo, ".config/mise/conf.d/rust.toml"));
+  assert.ok(!fs.readdirSync(path.join(repo, ".config/mise/conf.d")).some((f) => /^\d/.test(f)));
+  assert.match(read(repo, "tests/lint_wall.rs"), /conf\.d\/rust\.toml/);
+  assert.match(read(repo, ".github/workflows/quality.yml"), /conf\.d\/ts\.toml/);
+  assert.equal(fs.statSync(path.join(repo, ".config/mise/tasks/hygiene")).mode & 0o111, 0o111);
+  assert.ok(has(repo, "bunfig.toml"));
+  for (const f of ["README.md", "src/main.ts", "bun.lock"]) assert.ok(!has(repo, f), f);
+});
+
+test("apply never overwrites and reports every collision", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  write(repo, ".gitignore", "mine\n");
+  write(repo, "package.json", '{"name":"mine"}\n');
+  write(repo, ".config/mise/config.toml", "# mine\n");
+  const result = run(repo, { catalog, profiles: parseProfiles(["ts", "rust"]), packageManager: "bun" });
+  assert.equal(read(repo, ".gitignore"), "mine\n");
+  assert.equal(read(repo, "package.json"), '{"name":"mine"}\n');
+  assert.equal(read(repo, ".config/mise/config.toml"), "# mine\n");
+  const dests = result.conflicts.map((c) => c.dest);
+  for (const d of [".gitignore", "package.json", ".config/mise/config.toml", ".github/CODEOWNERS"]) assert.ok(dests.includes(d), d);
+  // Rust's CODEOWNERS collides with TS's from the same run, not the repo.
+  assert.equal(result.conflicts.find((c) => c.src?.endsWith(path.join("Rust", ".github", "CODEOWNERS"))).reason, "copied earlier in this run");
+  // A second run changes nothing.
+  const again = run(repo, { catalog, profiles: parseProfiles(["ts", "rust"]), packageManager: "bun" });
+  assert.equal(again.ops.length, 0);
+});
+
+test("left-out groups skip their files, CODEOWNERS lines and report their tasks", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  const result = run(repo, { catalog, profiles: parseProfiles(["ts"]), packageManager: "pnpm", owner: "@trae" });
+  assert.ok(!has(repo, "stryker.config.mjs"));
+  assert.ok(!has(repo, "scripts/run-stryker.mjs"));
+  assert.ok(!has(repo, "bunfig.toml"));
+  const owners = read(repo, ".github/CODEOWNERS");
+  assert.doesNotMatch(owners, /stryker|bunfig|@OWNER|Replace/);
+  assert.match(owners, /\* @trae\n\/package\.json @trae/);
+  const mutation = result.dropped.find((d) => d.group === "ts:mutation");
+  assert.deepEqual(mutation.tasks, ["ts:mutants"]);
+  // The fragment's lines still name the group; the shared .gitignore is kept whole.
+  assert.deepEqual(mutation.mentions, [".config/mise/conf.d/ts.toml (1)"]);
+  assert.deepEqual(result.profileDocs, ["TS/README.md"]);
+  assert.ok(result.notes.some((n) => /use Bun; rewrite them for pnpm/.test(n)));
+});
+
+test("--with turns a group on", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  const result = run(repo, { catalog, profiles: parseProfiles(["ts"]), packageManager: "bun", with: ["ts:mutation"] });
+  assert.ok(has(repo, "stryker.config.mjs"));
+  assert.ok(!result.dropped.some((d) => d.group === "ts:mutation"));
+  assert.ok(result.notes.some((n) => /@OWNER/.test(n)));
+});
+
+test("a profile in a subdirectory keeps .github at the root", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  const result = run(repo, { catalog, profiles: parseProfiles(["csharp=desktop/"]) });
+  assert.ok(has(repo, "desktop/Directory.Build.props"));
+  assert.ok(has(repo, ".github/workflows/quality.yml"));
+  assert.ok(!has(repo, "desktop/.github"));
+  assert.ok(result.notes.some((n) => n.includes('dir = "{{config_root}}/desktop"')));
+});
+
+test("bad input fails before anything is written", () => {
+  const catalog = makeCatalog();
+  const repo = tmp();
+  assert.throws(() => plan({ catalog, repo, profiles: parseProfiles(["ts"]) }), /ask the user/);
+  assert.throws(() => plan({ catalog, repo, profiles: parseProfiles(["kotlin"]) }), /unknown profile kotlin/);
+  assert.throws(() => plan({ catalog, repo, profiles: parseProfiles(["rust"]), with: ["rust:nope"] }), /unknown group/);
+  assert.throws(() => plan({ catalog, repo, profiles: parseProfiles(["rust", "rust"]) }), /named twice/);
+  assert.throws(() => parseProfiles(["rust=../x"]), /inside the repo/);
+  assert.throws(() => plan({ catalog: repo, repo, profiles: parseProfiles(["rust"]) }), /not the standards catalog/);
+  assert.deepEqual(fs.readdirSync(repo), []);
+});
+
+test("CODEOWNERS pruning matches globs and directories", () => {
+  const text = "* @a\neslint.config.* @a\n/type-tests/tsconfig.json @a\n/scripts/ @a\n# eslint.config.* stays in comments\n";
+  const out = pruneCodeowners(text, ["eslint.config.mjs", "type-tests/"], "@a");
+  assert.equal(out, "* @a\n/scripts/ @a\n# eslint.config.* stays in comments\n");
+});
+
+test("detect finds profiles, nested roots and the package manager", () => {
+  const repo = tmp();
+  write(repo, "package.json", '{"packageManager":"pnpm@9.0.0"}');
+  write(repo, "pnpm-lock.yaml", "");
+  write(repo, "tsconfig.json", "{}");
+  write(repo, "src/index.ts", "");
+  write(repo, "desktop/App.csproj", "");
+  write(repo, "crates/a/Cargo.toml", "");
+  write(repo, "crates/b/Cargo.toml", "");
+  write(repo, "Cargo.toml", "");
+  write(repo, "node_modules/x/Cargo.toml", "");
+  write(repo, "scripts/build.sh", "");
+  write(repo, "docs/a.md", "");
+  const d = detect(repo);
+  assert.deepEqual(d.profiles.ts.dirs, ["."]);
+  assert.deepEqual(d.profiles.csharp.dirs, ["desktop"]);
+  assert.deepEqual(d.profiles.rust.dirs, ["."]);
+  assert.equal(d.profiles.shell.candidate, true);
+  assert.equal(d.profiles.markdown.candidate, true);
+  assert.equal(d.packageManagers["."].packageManager, "pnpm");
+  assert.deepEqual(d.existing, ["docs/"]);
+});
+
+test("detect reports an ambiguous or missing package manager", () => {
+  const repo = tmp();
+  write(repo, "package.json", "{}");
+  write(repo, "index.js", "");
+  assert.equal(detect(repo).packageManagers["."].packageManager, null);
+  write(repo, "yarn.lock", "");
+  write(repo, "package-lock.json", "");
+  const pm = detect(repo).packageManagers["."];
+  assert.equal(pm.packageManager, null);
+  assert.equal(pm.ambiguous, true);
+  assert.deepEqual(pm.candidates.sort(), ["npm", "yarn"]);
+});
+
+// Runs against a real clone of KrishRVH/standards when STANDARDS_CATALOG
+// points at one, so catalog layout changes show up here.
+test("the real catalog applies cleanly", { skip: !process.env.STANDARDS_CATALOG }, () => {
+  const catalog = process.env.STANDARDS_CATALOG;
+  const repo = tmp();
+  const names = ["ts", "rust", "python", "go", "shell", "markdown", "csharp", "kotlin", "swift"];
+  for (const name of names) {
+    const r = tmp();
+    run(r, { catalog, profiles: parseProfiles([name]), packageManager: "bun", owner: "@trae" });
+    assert.ok(has(r, `.config/mise/conf.d/${name === "markdown" ? "markdown" : name}.toml`), name);
+  }
+  const result = run(repo, { catalog, profiles: parseProfiles(["ts", "rust"]), packageManager: "bun", owner: "@trae" });
+  const config = read(repo, ".config/mise/config.toml");
+  assert.doesNotMatch(config, /syft|sbom|_dispatch/);
+  assert.deepEqual(result.notes, []);
+  const all = fs.readdirSync(repo, { recursive: true }).map(String);
+  for (const f of all) {
+    if (fs.statSync(path.join(repo, f)).isFile()) {
+      assert.doesNotMatch(read(repo, f), /\b20-(ts|rust)\.toml\b/, f);
+    }
+  }
+});

@@ -12,6 +12,11 @@
       "name": "state-machine-audit",
       "source": "./plugins/state-machine-audit",
       "description": "Audit a codebase for implicit state machines and their failure states, with a state machines doc, agent guidance and one issue draft per confirmed failure."
+    },
+    {
+      "name": "repo-standards",
+      "source": "./plugins/repo-standards",
+      "description": "Sets up formatting, linting, tests and CI gates in a repo from the KrishRVH/standards catalog, applying only the profiles the repo uses."
     }
   ]
 }
