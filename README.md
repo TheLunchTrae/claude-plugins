@@ -1,6 +1,6 @@
 # claude-plugins
 
-Trae's Claude Code plugins, published as a plugin marketplace named `thelunchtrae`.
+My Claude Code plugins, published as a plugin marketplace named `thelunchtrae`.
 
 ## Install
 
