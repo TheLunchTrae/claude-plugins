@@ -371,10 +371,10 @@ test("GitHub's other CODEOWNERS and template locations count as existing", () =>
 });
 
 test("a subdirectory profile's CODEOWNERS points at its directory", () => {
-  const text = "* @a\n/Directory.Build.props @a\n/.github/workflows/ @a\n/.config/mise/conf.d/csharp.toml @a\nCargo.toml @a\n";
+  const text = "* @a\n/Directory.Build.props @a\n/AGENTS.md @a\n/.github/workflows/ @a\n/.config/mise/conf.d/csharp.toml @a\nCargo.toml @a\n";
   assert.equal(
     prefixCodeowners(text, "desktop"),
-    "* @a\n/desktop/Directory.Build.props @a\n/.github/workflows/ @a\n/.config/mise/conf.d/csharp.toml @a\nCargo.toml @a\n",
+    "* @a\n/desktop/Directory.Build.props @a\n/AGENTS.md @a\n/.github/workflows/ @a\n/.config/mise/conf.d/csharp.toml @a\nCargo.toml @a\n",
   );
   assert.equal(prefixCodeowners(text, "."), text);
 });
@@ -399,8 +399,11 @@ test("a failed apply removes what it wrote", () => {
   // Something appears between the plan and the write.
   write(repo, result.ops[result.ops.length - 1].dest, "late\n");
   assert.throws(() => applyPlan(repo, result, tmp()), /EEXIST/);
-  const left = fs.readdirSync(repo, { recursive: true }).filter((f) => fs.statSync(path.join(repo, f)).isFile());
-  assert.deepEqual(left, [result.ops[result.ops.length - 1].dest.split("/").join(path.sep)]);
+  // Only the late file and its directories are left, not the directories the
+  // failed run created.
+  const late = result.ops[result.ops.length - 1].dest.split("/");
+  const expected = late.map((_, i) => late.slice(0, i + 1).join(path.sep));
+  assert.deepEqual(fs.readdirSync(repo, { recursive: true }).map(String).sort(), expected.sort());
 });
 
 test("detect keeps a separate nested app and folds workspace members into their root", () => {
@@ -463,4 +466,43 @@ test("the CLI runs through a symlink and rejects unknown options", { skip: proce
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /unknown option --platform/);
   assert.throws(() => parseProfiles(["rust=C:\\x"]), /inside the repo/);
+});
+
+test("executables come from the catalog's git index, which Windows file systems need", () => {
+  const catalog = makeCatalog();
+  write(catalog, "Rust/scripts/check.sh", "#!/bin/sh\n", 0o644);
+  const git = (...a) => execFileSync("git", ["-C", catalog, ...a], { stdio: "ignore" });
+  git("init", "-q");
+  git("add", "-A");
+  git("update-index", "--chmod=+x", "Rust/scripts/check.sh");
+  // As on Windows: the files on disk have no execute bit.
+  fs.chmodSync(path.join(catalog, "Mise/tasks/hygiene"), 0o644);
+  const repo = tmp();
+  const result = run(repo, { catalog, profiles: parseProfiles(["rust"]) });
+  assert.deepEqual(result.executables.sort(), [".config/mise/tasks/hygiene", "scripts/check.sh"]);
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(path.join(repo, "scripts/check.sh")).mode & 0o111, 0o111);
+  }
+});
+
+test("without a git index, the known executables are still listed", () => {
+  const catalog = makeCatalog();
+  fs.chmodSync(path.join(catalog, "Mise/tasks/hygiene"), 0o644);
+  const result = plan({ catalog, repo: tmp(), profiles: parseProfiles(["rust"]) });
+  assert.ok(result.executables.includes(".config/mise/tasks/hygiene"));
+});
+
+test("detect lists a file once, under its name on disk", () => {
+  const repo = tmp();
+  write(repo, ".github/PULL_REQUEST_TEMPLATE.md", "");
+  const { existing } = detect(repo);
+  assert.deepEqual(existing.filter((e) => /pull_request_template/i.test(e)), [".github/PULL_REQUEST_TEMPLATE.md"]);
+});
+
+test("a dangling symlink at a watched path doesn't stop detect or apply", { skip: process.platform === "win32" }, () => {
+  const repo = tmp();
+  fs.symlinkSync(path.join(repo, "missing"), path.join(repo, "CLAUDE.md"));
+  assert.ok(!detect(repo).existing.includes("CLAUDE.md"));
+  const result = plan({ catalog: makeCatalog(), repo, profiles: parseProfiles(["rust"]) });
+  assert.ok(result.conflicts.some((c) => c.dest === "CLAUDE.md"));
 });

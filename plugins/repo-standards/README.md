@@ -34,7 +34,7 @@ The catalog isn't copied into this plugin. The skill clones it when it runs, so 
 - The TypeScript and Markdown profiles need `--package-manager`. With anything but Bun, `bunfig.toml` is skipped and the Bun tasks are listed for rewriting.
 - Each profile's README isn't copied; the report lists them so their operational notes can move into `docs/developer/`.
 - A profile in a subdirectory gets its `CODEOWNERS` patterns prefixed with that directory, and the report lists the paths still to fix.
-- The report lists the files that must stay executable, because Git on Windows doesn't record file modes.
+- The report lists the files that must stay executable, read from the catalog clone's git index, because Git on Windows doesn't record file modes.
 - `--owner` fills `@OWNER` in `CODEOWNERS`. `--dry-run` prints the plan and writes nothing; `--json` prints it as JSON. Unknown options are an error.
 
 ## Tests

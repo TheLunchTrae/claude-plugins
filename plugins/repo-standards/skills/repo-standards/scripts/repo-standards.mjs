@@ -178,13 +178,14 @@ function findCaseless(root, rel) {
     found.push(hit);
     at = path.join(at, hit);
   }
-  const stat = fs.statSync(at);
+  let stat;
+  try {
+    stat = fs.statSync(at);
+  } catch {
+    return null; // a dangling symlink
+  }
   if (dir ? !stat.isDirectory() || fs.readdirSync(at).length === 0 : !stat.isFile()) return null;
   return found.join("/") + (dir ? "/" : "");
-}
-
-function existsCaseless(root, rel) {
-  return findCaseless(root, rel) !== null;
 }
 
 // Converts a workspace glob (apps/*, packages/**) to a regex for directories.
@@ -256,13 +257,14 @@ export function pruneCodeowners(text, excluded, owner) {
 // For a profile copied into a subdirectory, points its CODEOWNERS patterns at
 // that directory. Paths under .github/ and .config/ stay at the root, where
 // those files are written; the catch-all and unanchored names stay as they are.
+const ROOT_FILES = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md", ".gitignore", ".gitattributes", ".gitleaks.toml"];
 export function prefixCodeowners(text, dir) {
   if (dir === ".") return text;
   return text
     .split("\n")
     .map((line) => {
       const m = line.match(/^(\/)(\S+)(.*)$/);
-      if (!m || /^\.(github|config)\//.test(m[2])) return line;
+      if (!m || /^\.(github|config)\//.test(m[2]) || ROOT_FILES.includes(m[2])) return line;
       return `/${dir}/${m[2]}${m[3]}`;
     })
     .join("\n");
@@ -273,6 +275,27 @@ function isText(buf) {
 }
 
 // ---------------------------------------------------------------- catalog
+
+// Catalog files that must stay executable. Windows file systems don't record
+// the mode, so this reads git's index of the clone and falls back to a list.
+const KNOWN_EXECUTABLES = ["Mise/tasks/hygiene", "Shell/scripts/shell-standards.sh"];
+export function catalogExecutables(catalog) {
+  const found = new Set(KNOWN_EXECUTABLES);
+  try {
+    const index = execFileSync("git", ["-C", catalog, "ls-files", "-s"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const line of index.split("\n")) {
+      const m = line.match(/^100755 \S+ \d+\t(.+)$/);
+      if (m) found.add(m[1]);
+    }
+  } catch {
+    // not a git clone; the list and the file system have to do
+  }
+  return found;
+}
 
 // Reads profile metadata from the catalog's standards.manifest.toml, so a
 // renamed template or fragment there is picked up instead of guessed.
@@ -466,7 +489,7 @@ export function detect(repo) {
     "CONTEXT.md", ".gitignore", ".gitattributes", ".gitleaks.toml", ".github/CODEOWNERS",
     ".github/pull_request_template.md", ...Object.values(ALIASES).flat(), "docs/",
   ];
-  const existing = watched.filter((w) => existsCaseless(repo, w));
+  const existing = [...new Set(watched.map((w) => findCaseless(repo, w)).filter(Boolean))];
   const fragments = walk(path.join(repo, ".config/mise/conf.d")).map((f) => `.config/mise/conf.d/${f}`);
   existing.push(...fragments);
   const workflows = files.filter((f) => f.startsWith(".github/workflows/"));
@@ -541,10 +564,17 @@ export function plan(opts) {
   const conflicts = [];
   const notes = [];
   const claimed = new Set();
+  const execs = catalogExecutables(catalog);
   // Why dest can't be written, or null.
   const blocked = (rel) => {
     if (claimed.has(rel)) return "copied earlier in this run";
-    if (fs.existsSync(path.join(repo, rel))) return "already in the repo";
+    // lstat, so a dangling symlink counts too: the write would fail on it.
+    try {
+      fs.lstatSync(path.join(repo, rel));
+      return "already in the repo";
+    } catch {
+      // not there
+    }
     const alias = (ALIASES[rel] || []).map((a) => findCaseless(repo, a)).find(Boolean);
     if (alias) return `the repo already has ${alias}, which GitHub uses instead`;
     const caseless = findCaseless(repo, rel);
@@ -558,7 +588,9 @@ export function plan(opts) {
   };
   const addCopy = (srcAbs, dest, extra = (t) => t, why = null) => {
     const buf = fs.readFileSync(srcAbs);
-    const mode = fs.statSync(srcAbs).mode & 0o777;
+    const fsMode = fs.statSync(srcAbs).mode & 0o777;
+    const executable = execs.has(path.relative(catalog, srcAbs).split(path.sep).join("/")) || (fsMode & 0o111) !== 0;
+    const mode = executable ? 0o755 : fsMode & 0o666 || 0o644;
     const op = isText(buf) ? { kind: "write", dest, content: extra(transform(buf.toString("utf8"))), mode, src: srcAbs } : { kind: "copy", dest, src: srcAbs, mode };
     const reason = why || blocked(dest);
     if (reason) {
@@ -701,10 +733,12 @@ export function plan(opts) {
 // The versions to merge go to mergeDir, outside the repo.
 export function applyPlan(repo, result, mergeDir = null) {
   const written = [];
+  const createdDirs = [];
   try {
     for (const op of result.ops) {
       const dest = path.join(repo, op.dest);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const made = fs.mkdirSync(path.dirname(dest), { recursive: true });
+      if (made) createdDirs.push(made);
       if (op.kind === "copy") fs.copyFileSync(op.src, dest, fs.constants.COPYFILE_EXCL);
       else fs.writeFileSync(dest, op.content, { flag: "wx" });
       written.push(dest);
@@ -712,6 +746,8 @@ export function applyPlan(repo, result, mergeDir = null) {
     }
   } catch (err) {
     for (const f of written.reverse()) fs.rmSync(f, { force: true });
+    // mkdirSync returns the first directory it created; remove those it made.
+    for (const d of createdDirs.reverse()) fs.rmSync(d, { recursive: true, force: true });
     throw err;
   }
   if (!result.conflicts.length) return;
@@ -747,7 +783,8 @@ export function formatReport(result, catalog, dryRun) {
     );
     for (const c of result.conflicts) {
       const from = c.merge ? path.relative(result.mergeDir, c.merge).split(path.sep).join("/") : c.src ? rel(c.src) : "generated";
-      lines.push(`  ${c.dest} <- ${from} (${c.reason})`);
+      const origin = c.src ? ` from ${rel(c.src)}` : "";
+      lines.push(`  ${c.dest} <- ${from}${origin} (${c.reason})`);
     }
   }
   if (result.executables.length) {
