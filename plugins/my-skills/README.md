@@ -36,3 +36,7 @@ Each skill runs when a request matches its description, or by name as `/my-skill
 ## What's in it
 
 - `skills/ci-cleanup/SKILL.md`: a checklist of common CI pitfalls (job dependencies, clone size, superseded runs, completion events instead of polling, and flaky tests) to find and fix when cleaning up or de-flaking CI.
+- `skills/pr-merge-hygiene/SKILL.md`: keeping PRs mergeable under squash merging (no stacking, rebasing and retargeting stacked PRs, conflict checks before "ready" and after other merges, version bumps in the same PR).
+- `skills/dependency-alerts/SKILL.md`: fixing vulnerable dependency alerts by updating rather than overriding, and leaving dev-only alerts for me to dismiss.
+- `skills/visual-deliverables/SKILL.md`: mock-ups, screenshots and videos for visual changes, shared in chat (mp4, never webm), never committed or pushed to a branch just for them.
+- `skills/native-ui-conventions/SKILL.md`: following each platform's UI conventions, starting with per-platform casing (Title Case on macOS, sentence case on Windows).

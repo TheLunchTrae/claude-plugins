@@ -1,7 +1,7 @@
 {
   "name": "my-skills",
   "displayName": "Trae's Skills",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "My general-purpose skills, in one plugin so they come with me to any session.",
   "author": { "name": "Trae Stevens" },
   "license": "MIT",
