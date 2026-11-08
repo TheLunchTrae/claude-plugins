@@ -5,7 +5,8 @@ A Claude Code plugin for a strict pull request workflow: every PR opens as a dra
 Install:
 
 ```
-/plugin install pr-workflow --marketplace TheLunchTrae/claude-plugins
+/plugin marketplace add TheLunchTrae/claude-plugins
+/plugin install pr-workflow@thelunchtrae
 ```
 
 Requires Node 18 or later on `PATH` (the hooks are one dependency-free Node script). Works on macOS, Linux and Windows (Git Bash or PowerShell).
