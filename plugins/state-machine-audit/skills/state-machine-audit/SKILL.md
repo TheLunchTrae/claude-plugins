@@ -50,12 +50,14 @@ For each machine write down:
 - **Transitions**: each event that moves it (call, message, timer, callback, user action, process start or exit) and where it goes.
 - **Start and end**: where it starts, and whether it ever ends (process exit, dispose, reload).
 - **Guards**: what drops stale events (session IDs, generations, checkpoints, abort signals).
+- **Lifetime**: what scope the state lives in (one call, one instance or reload, the process, files that outlive it) and who else shares it (other windows, clients or processes on the same directory or account).
+- **Promises**: what the README, user docs and code comments tell users this behaviour does. A gap between the promise and the code is a failure in Step 3.
 
 Trace transitions from the code, not from names or comments. Every claim cites the code that makes it true.
 
 ## Step 3: Look for failure states
 
-Check every machine against [references/failure-checklist.md](references/failure-checklist.md). The main kinds:
+Check every machine against every section of [references/failure-checklist.md](references/failure-checklist.md), one machine at a time, and write down the answer to each question, not only the ones that look promising. Most real findings are in the places a quick read skips: a retry that waits on an event, a list that only grows, feedback that only one client shows. For more than a handful of machines, give each subagent a few machines, the checklist and the code, and merge their candidates. The main kinds:
 
 - **Stuck**: a reachable state with no way out short of a restart (a cache that keeps a rejection, a flag never cleared on error, a page with no way back).
 - **Missing exits**: no error, cancel, timeout or retry path where the outside world can fail or the user can leave.
@@ -64,7 +66,9 @@ Check every machine against [references/failure-checklist.md](references/failure
 - **Impossible combinations**: field values that name no state but are reachable.
 - **Leaks and outliving**: resources, listeners, windows, files or processes not released, or state that outlives its process or owner.
 - **Unreachable or dead states**: a state the code handles that nothing can reach, which usually means a missing transition elsewhere.
-- **Silent failure**: a failure the user never hears about, so they can't recover.
+- **Silent failure**: a failure the user never hears about, so they can't recover, including feedback that only some clients or surfaces show.
+- **Stale memory**: state that only grows or is never cleared, which keeps deciding behaviour after the thing it recorded has gone.
+- **Broken promises**: behaviour that contradicts what the README or docs tell users.
 
 Write each candidate as: the machine, how to reach the state (numbered steps), the code at each step, what goes wrong, and who sees it.
 
@@ -75,12 +79,20 @@ Each candidate is confirmed or unconfirmed, never guessed into an issue.
 - **Confirmed**: reproduced by a test or script you ran (preferred, and kept out of the repo unless asked), or traced step by step through the code with every step cited, and an independent check didn't refute it.
 - **Unconfirmed**: depends on host, platform or timing behaviour you couldn't check, on intent the code doesn't settle ("should a held rule fire after its cooldown?"), or on a step you couldn't trace.
 
-Have a fresh subagent try to refute each confirmed candidate before it becomes a draft: the plugin's `state-machine-verifier` agent (or, if it isn't available, a fresh general-purpose agent given that agent's instructions), handed the candidate and the code, not your reasoning. Verifiers for different candidates can run in parallel. A refuted candidate is dropped or moved to unconfirmed with the reason.
+Two rules keep real findings out of the unconfirmed pile:
+
+- A premise the repo's own code, comments or docs assert (such as "a reload ends running terminals") counts as checked. Say in the draft that it rests on it.
+- Hard to set up isn't unconfirmed. If a test can drive it through the code, such as calling the same functions in the order two processes, two windows or two overlapping requests would, it's confirmable: write that test. Two processes on one directory, two windows, or a second client are normal use, not edge cases.
+
+Reproduction scripts live outside the repo. Import the repo's code by absolute path and run them with the repo as the working directory, so its dependencies and config resolve, using the repo's own test runner where it has one.
+
+Have a fresh subagent try to refute each confirmed candidate before it becomes a draft: the plugin's `state-machine-verifier` agent (or, if it isn't available, a fresh general-purpose agent given that agent's instructions), handed the candidate and the code, not your reasoning. Verifiers for different candidates can run in parallel. A refuted candidate is dropped or moved to unconfirmed with the reason. If you can't start a subagent at all, run the refutation yourself as a separate pass after all candidates are written, record it as `self-checked` in the draft, and say in the report that no independent check ran.
 
 ## Step 5: Write the doc and the guidance
 
 - **Doc**: follow [references/doc-template.md](references/doc-template.md). Put it where the repo keeps developer docs (`docs/developer/`, `docs/`, or a wiki source folder), or keep the existing doc's place and format. One section per machine, with its owner, states, transitions (a Mermaid `stateDiagram-v2`, a State | Event | Next table, or both) and failure states. A failure state links its issue once one exists; until then it says it's untracked. The doc describes behaviour; it doesn't hold bug reports.
-- **Guidance**: add or update the `## State machines` section of `AGENTS.md` from [references/agents-guidance.md](references/agents-guidance.md), adapted to the repo's languages and test setup. If the repo only has `CLAUDE.md`, put it there. If shared org guidance already covers it, link that and keep only the repo-specific lines.
+- **Scope of the doc**: the repo's own doc rules apply to it (audience, where developer docs live, what stays out). CI and release workflows belong in it only when their state can strand a release or a user, such as a publish that half-completes; keep those sections short.
+- **Guidance**: add or update the `## State machines` section of `AGENTS.md` from [references/agents-guidance.md](references/agents-guidance.md), adapted to the repo's languages and test setup. If the repo only has `CLAUDE.md`, put it there. If shared org guidance already covers it, link that and keep only the repo-specific lines. If linked guidance can't be read, keep the full section and say so in the report.
 
 Show the user the doc's machine list and the guidance diff when done.
 
@@ -91,7 +103,7 @@ Write one draft per confirmed failure with [references/issue-template.md](refere
 Put the drafts outside the repo: in a folder the user names, otherwise `state-machine-audit/<repo>/` under the system temp directory. Write:
 
 - `NN-<slug>.md` per draft, highest severity first.
-- `report.md`: the audited commit, the machine list, the drafts by severity, and an **Unconfirmed** section with each case, why it's unconfirmed, and what would settle it.
+- `report.md`: the audited commit, the machine list, the drafts by severity, an **Unconfirmed** section with each case, why it's unconfirmed, and what would settle it, and a **Set aside** section with candidates you dropped and why (refuted, or no harm), so a re-audit doesn't redo them. Note anything you couldn't check, such as labels or open issues without GitHub access.
 
 Then report to the user: how many machines, the confirmed failures by severity with their titles, the unconfirmed count, and where the files are.
 

@@ -9,6 +9,7 @@ Run every question against every machine. A "yes" is a candidate, not a finding:
 - Does a page, dialog or mode have a way back for every way in? Can the user reach a screen with no control that leaves it?
 - Does a retry exist, and does it ever run? A retry that waits for an event which may never come (an idle session, a focus change, the next sample) is a stuck state.
 - Does a watcher, poll or reader detect that its source stopped producing, or does it wait forever on stale values?
+- For every deferred action (a wanted reload, a queued save, a pending retry): list each event that triggers it, and ask what happens if the condition still isn't met when that event fires. If nothing tries again, it's stuck until an unrelated event happens to come.
 
 ## Missing exits
 
@@ -35,6 +36,12 @@ For each transition that touches the outside world (network, disk, host API, ano
 - Is there check-then-act across an `await`, a lock release, or a thread hop?
 - Does work started for one owner (session, window, process, provider setup) get applied to another?
 
+## Stale memory
+
+- Is there state that is only ever added to (a set of seen IDs, a list of models used, a map of known items), in memory or on disk? What decision reads it, and does that decision go wrong once the thing it recorded is gone, renamed or changed by the user?
+- Is state keyed too coarsely (per directory, per user, per app) when what it describes differs per something finer (per provider setup, per window, per account)? Then whoever writes last wins for everyone.
+- Is a decision based on history ("this was ever set by X") where it should be based on the current source ("this is set by X now")?
+
 ## Impossible combinations
 
 - Can the fields hold a combination that names no state (two flags both true, a status with a missing handle)? Is it reachable?
@@ -54,7 +61,12 @@ For each transition that touches the outside world (network, disk, host API, ano
 ## Silent failure
 
 - Does the user, or a log, hear about every failure that changes what they'd do next?
+- Is the feedback shown on every surface the machine runs under: each client, UI, CLI, headless or API mode, platform? Feedback that lives in one client's code is silence in the others.
 - Does a fallback hide that the thing they asked for didn't happen (a rerouted request, a skipped item, a default used instead)?
+
+## Broken promises
+
+- Read the README and user docs for each machine. Does the code do what they say in every state, including after failure, reload and restart? A promise like "a model you set yourself is left alone" or "this happens once" is a transition to test.
 
 ## Severity
 
@@ -66,4 +78,4 @@ Use the repo's priority labels if it has them, mapped like this:
 | **Medium** | The feature stops working until a restart, reload or manual step, or is degraded for a whole session; the user can recover but has to know how. |
 | **Low** | Rare timing, easy recovery, cosmetic or misleading state, or a leak with no visible effect in normal use. |
 
-Raise one level when it's common in normal use; lower one when it needs an unusual setup. Say which you applied.
+Raise one level when it's common in normal use; lower one when it needs an unusual setup. Low is the floor; something below it goes under Set aside in the report. Record the level and any adjustment in the draft's `severity_reason`.

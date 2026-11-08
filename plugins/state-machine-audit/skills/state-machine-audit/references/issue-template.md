@@ -3,7 +3,7 @@
 One draft per confirmed failure. Write for the person who'll fix it: what goes wrong, how to get there, where the code allows it, and which way a fix could go. Don't write the fix.
 
 - **Title**: the symptom in plain words, as a user or caller sees it, not the mechanism. "A snippet saved while the project loads is dropped until restart", not "Race in startupSnippets cache".
-- **Severity**: from the failure checklist. Put it in the draft's front matter so filing can map it to the repo's labels.
+- **Severity**: from the failure checklist. Put it in the draft's front matter so filing can map it to the repo's labels. If you couldn't read the repo's labels, leave `labels` empty and say so in the report.
 - **Links**: permalinks to the audited commit (`https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<a>-L<b>`) so they survive moves. Name the symbol too.
 - **Steps**: numbered, each with the code that makes it happen. For a race, say which order of events triggers it.
 - Note what you could not check (platform behaviour, timing) in the draft; if that's the whole case, it's unconfirmed and doesn't get a draft.
@@ -12,9 +12,11 @@ One draft per confirmed failure. Write for the person who'll fix it: what goes w
 ---
 title: <symptom>
 severity: <high | medium | low>
+severity_reason: <the rule from the checklist, and any raise or lower>
 labels: [<only labels the repo has, such as bug and its priority label>]
 machine: <machine name in the doc>
-confirmed_by: <test or script run | code trace, verifier could not refute>
+confirmed_by: <how it was reproduced (test, script or full code trace), then the check (verifier could not refute | self-checked)>
+premises: <any behaviour the draft relies on that the repo asserts but you couldn't run, or none>
 ---
 
 ## What goes wrong
