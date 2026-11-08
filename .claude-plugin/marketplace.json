@@ -1,0 +1,12 @@
+{
+  "name": "thelunchtrae",
+  "owner": { "name": "Trae Stevens" },
+  "metadata": { "description": "Trae's Claude Code plugins." },
+  "plugins": [
+    {
+      "name": "pr-workflow",
+      "source": "./plugins/pr-workflow",
+      "description": "Pull request workflow: draft first, independent reviewer loop, ready after approval, and a Stop hook that keeps sessions from ending a turn mid-review."
+    }
+  ]
+}
